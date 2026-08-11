@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation
+from vera_engine.invocation import EngineInvocation, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
 _EFFORT_MAP = {
@@ -12,6 +12,9 @@ _EFFORT_MAP = {
     "medium": "medium",
     "high": "high",
 }
+
+
+DEFAULT_PROMPT_FILENAME = ".vera-engine-claude-prompt.md"
 
 
 class ClaudeCodeBuilder(EngineBuilder):
@@ -31,7 +34,14 @@ class ClaudeCodeBuilder(EngineBuilder):
     ) -> EngineInvocation:
         self.validate_strategy(strategy)
 
-        argv: list[str] = ["claude", "-p", request.prompt, "--verbose"]
+        prompt_file = MaterializedFile(
+            relative_path=DEFAULT_PROMPT_FILENAME,
+            content=request.prompt,
+            cleanup=True,
+        )
+        prompt_path = request.workspace / DEFAULT_PROMPT_FILENAME
+
+        argv: list[str] = ["claude", "-p", str(prompt_path), "--verbose"]
 
         model = request.model or self.default_model()
         if model:
@@ -47,7 +57,6 @@ class ClaudeCodeBuilder(EngineBuilder):
 
         env["CLAUDE_CODE_EFFORT_LEVEL"] = _EFFORT_MAP[request.effort]
 
-        # Merge extra env (plain strings only; no SecretRef override).
         for k, v in request.extra_env.items():
             if k not in env:
                 env[k] = v
@@ -59,4 +68,6 @@ class ClaudeCodeBuilder(EngineBuilder):
             workdir=request.workspace,
             home_strategy="hermetic",
             timeout_seconds=request.timeout_seconds,
+            files=(prompt_file,),
+            prompt_path=prompt_path,
         )

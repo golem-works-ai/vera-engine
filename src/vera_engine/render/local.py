@@ -7,6 +7,8 @@ files, spawns the engine, captures output, and cleans up.
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,11 +31,21 @@ def _resolve_env(
     return resolved
 
 
+_REFERENCE_RE = re.compile(r"\$(?:\{(?P<braced>\w+)\}|(?P<bare>\w+))")
+
+
 def _expand_vars(text: str, env: dict[str, str]) -> str:
-    """Expand $NAME references in text using the resolved env."""
-    for name, value in env.items():
-        text = text.replace(f"${name}", value)
-    return text
+    """Expand $NAME and ${NAME} references. Fails fast on unresolved ones."""
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group("braced") or match.group("bare")
+        try:
+            return env[name]
+        except KeyError:
+            raise ValueError(
+                f"unresolved reference ${name} in materialized file "
+                f"(available: {sorted(env)})"
+            ) from None
+    return _REFERENCE_RE.sub(_replace, text)
 
 
 def _build_base_env(
@@ -143,8 +155,4 @@ def render_local(
     finally:
         # Clean up hermetic home directory.
         if hermetic_tmpdir:
-            try:
-                import shutil
-                shutil.rmtree(hermetic_tmpdir, ignore_errors=True)
-            except OSError:
-                pass
+            shutil.rmtree(hermetic_tmpdir, ignore_errors=True)

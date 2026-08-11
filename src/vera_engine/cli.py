@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from vera_engine.credentials import CredentialBundle
+from vera_engine.credentials import CredentialBundle, SecretRef
 from vera_engine.request import AgentRunRequest
 from vera_engine.selection import get_builder, list_engines
 from vera_engine.render.local import render_local
@@ -69,22 +69,32 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _collect_credentials() -> CredentialBundle:
-    """Collect credentials from the current environment.
+def _collect_credentials(invocation: "EngineInvocation") -> CredentialBundle:
+    """Collect credentials the invocation actually needs from the environment.
 
-    Grabs all env vars that look like API keys or auth tokens.
+    Reads exactly the env vars named by the invocation's SecretRefs.
+    Fails fast on any missing one.
     """
-    cred_names = [
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_BASE_URL",
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
+    from vera_engine.invocation import EngineInvocation  # noqa: F811
+
+    required = [
+        v for v in invocation.env.values()
+        if isinstance(v, SecretRef)
     ]
     values = {}
-    for name in cred_names:
-        val = os.environ.get(name)
+    missing = []
+    for ref in required:
+        val = os.environ.get(ref.name)
         if val:
-            values[name] = val
+            values[ref.name] = val
+        else:
+            missing.append(ref.name)
+    if missing:
+        print(
+            f"error: missing required credentials: {missing}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     return CredentialBundle(values=values)
 
 
@@ -125,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
 
     builder = get_builder(request.engine)
     invocation = builder.build_invocation(request, request.credential_strategy)
-    bundle = _collect_credentials()
+    bundle = _collect_credentials(invocation)
 
     result = render_local(invocation, bundle)
 
