@@ -1,0 +1,67 @@
+"""EngineInvocation: resolved subprocess specification."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from vera_engine.credentials import SecretRef, reject_credential_fields
+
+_VALID_HOME_STRATEGIES = frozenset({"hermetic", "shared", "real"})
+
+
+@dataclass(frozen=True)
+class MaterializedFile:
+    """A file to write into the workspace before spawning the engine."""
+
+    relative_path: str
+    content: str
+    cleanup: bool = True  # Remove after the engine exits.
+
+
+@dataclass(frozen=True)
+class EngineInvocation:
+    """Fully resolved specification for spawning an engine subprocess.
+
+    Built by an EngineBuilder from an AgentRunRequest.
+    """
+
+    engine: str
+    argv: tuple[str, ...]
+    env: dict[str, str | SecretRef]
+    workdir: Path
+    home_strategy: str = "hermetic"
+    timeout_seconds: int = 2400
+    files: tuple[MaterializedFile, ...] = ()
+    prompt_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not self.argv:
+            raise ValueError("argv must not be empty")
+        if self.home_strategy not in _VALID_HOME_STRATEGIES:
+            raise ValueError(
+                f"home_strategy must be one of {sorted(_VALID_HOME_STRATEGIES)}, "
+                f"got {self.home_strategy!r}"
+            )
+        reject_credential_fields(type(self))
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """Result of a local engine run."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+    engine: str
+    argv: tuple[str, ...]
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0 and not self.timed_out
+
+
+# Validate at import time.
+reject_credential_fields(EngineInvocation)
+reject_credential_fields(RunResult)
