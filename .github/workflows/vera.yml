@@ -1,0 +1,548 @@
+# vera-template-version: 2026.08.01.2
+# DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
+#
+# AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
+# job-type-specific logic, runtime-specific branches, tool allowlists, or
+# business logic of any kind. All of that lives server-side in:
+#   - src/vera/github/bootloader_script.py  (exec_script assembly)
+#   - src/vera/github/job_api.py             (credential exchange + callback)
+#   - src/vera/models/job.py                 (job state)
+# See docs/spec/workflow-template.md "Bootloader responsibility" for the
+# contract this file must satisfy. Because this file is installed into every
+# customer repository, every edit forces re-installation across all customer
+# installs — keep it thin and stable. Changes trigger a CI guard workflow.
+#
+# AGENT-NOTE: After editing this template, run
+#   `GH_TOKEN=$(gh auth token) uv run python scripts/ci/check_workflow_template_sync.py`
+# to confirm the deployed copy in vera-testing-bot/acceptance-testing is in
+# sync. CI will fail on push-to-main if it isn't. Incident:
+# docs/failures/2026-04/23-workflow-template-drift.md
+name: Vera
+# The trailing ``[short id]`` ALWAYS embeds the first UUID segment of the Vera
+# job id so the recovery layer can match a run back to its own dispatched job
+# (issue #4255). Keep it unconditional — dropping it whenever job_summary is set
+# is what made review/ux-review runs unmatchable and leaked credit.
+run-name: Vera — ${{ inputs.job_summary || format('job {0}', inputs.job_id) }} [${{ inputs.job_short_id }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_summary:
+        description: "Human-readable run title (e.g. 'Review Plan for #1234')"
+        required: false
+        default: ""
+        type: string
+      job_id:
+        description: "Vera job ID"
+        required: false
+        default: ""
+        type: string
+      job_short_id:
+        description: "First UUID segment of the Vera job ID (run-name matcher)"
+        required: false
+        default: ""
+        type: string
+      callback_token:
+        description: "HMAC callback token for Vera API auth"
+        required: false
+        default: ""
+        type: string
+      vera_api_url:
+        description: "Vera API base URL for credential exchange and callbacks"
+        required: false
+        default: ""
+        type: string
+      originating_ref:
+        description: "Originating issue/PR number for the failsafe finalizer comment"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  vera:
+    runs-on: vera-runners
+    timeout-minutes: 60
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          # Full history (not the default shallow fetch-depth: 1) so retry
+          # attempts can push to a pre-existing vera/<N>-<slug> branch without
+          # a spurious "unrelated history" rejection (issue #2915).
+          fetch-depth: 0
+
+      - name: Fetch job package
+        env:
+          VERA_JOB_ID: ${{ inputs.job_id }}
+          VERA_CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          VERA_API_URL: ${{ inputs.vera_api_url }}
+        run: |
+          # Issue #3815: every credential-exchange failure path below writes
+          # a ``runner-credential-exchange-failed`` reason to
+          # /tmp/vera_step_failure_reason so the Report failure step surfaces
+          # it and the classifier auto-retries (KNOWN_TRANSIENT_INFRA).
+          if [ -z "$VERA_API_URL" ] || [ -z "$VERA_JOB_ID" ] || [ -z "$VERA_CALLBACK_TOKEN" ]; then
+            echo "::error::Missing required inputs: vera_api_url, job_id, or callback_token"
+            printf '%s' "runner-credential-exchange-failed: missing required inputs" \
+              > /tmp/vera_step_failure_reason
+            exit 1
+          fi
+          # Retry policy is owned by this loop, NOT curl's --retry. The Vera
+          # dispatcher fires workflow_dispatch before the pending→running DB
+          # commit lands; the runner can win the race and hit a 409
+          # job_not_ready. curl's --retry only covers transport / 5xx, so we
+          # retry 409s explicitly here.
+          #
+          # Budget: MAX_ATTEMPTS * SLEEP_SECONDS = ~30s (issue #4135). The
+          # original 5 * 2s = 10s budget was sized for the "sub-second
+          # pending→running window", but under application load the DB commit
+          # can take longer and exhaust the budget before status flips — the
+          # canary hit "budget exhausted after 5 attempts of job_not_ready".
+          # The step timeout still bounds total runtime, so a wider budget
+          # cannot hang indefinitely.
+          # Credential response stays in $BODY only — never on disk (#2208).
+          ATTEMPT=0
+          MAX_ATTEMPTS=15
+          SLEEP_SECONDS=2
+          while :; do
+            RESPONSE=$(curl -sS -w $'\n%{http_code}' \
+              -X POST "${VERA_API_URL}/internal/jobs/credentials" \
+              -H "Content-Type: application/json" \
+              -d "{\"job_id\": \"${VERA_JOB_ID}\", \"token\": \"${VERA_CALLBACK_TOKEN}\", \"github_actions_run_url\": \"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}") || RESPONSE=$'\n000'
+            HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
+            BODY=$(printf '%s' "$RESPONSE" | sed '$d')
+            # One observability line per attempt so the cadence is visible
+            # in the runner log even on success (issue #2060).
+            echo "vera-creds: attempt $((ATTEMPT + 1))/${MAX_ATTEMPTS} http=${HTTP_CODE}"
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "410" ]; then
+              break
+            fi
+            if [ "$HTTP_CODE" = "409" ] && \
+               [ "$(printf '%s' "$BODY" | jq -r '.code // empty' 2>/dev/null)" = "job_not_ready" ]; then
+              ATTEMPT=$((ATTEMPT + 1))
+              if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+                echo "::error::vera-creds: budget exhausted after ${MAX_ATTEMPTS} attempts of job_not_ready"
+                printf '%s\n' "$BODY"
+                printf '%s' "runner-credential-exchange-failed: budget exhausted after ${MAX_ATTEMPTS} attempts of job_not_ready" \
+                  > /tmp/vera_step_failure_reason
+                exit 1
+              fi
+              sleep "${SLEEP_SECONDS}"
+              continue
+            fi
+            # Issue #3847: a 409 with code=credentials_already_issued means
+            # another runner already won the race and is doing the work. The
+            # job is not failed — it is owned by the winner. Mirror the 410
+            # graceful path so the loser exits 0 instead of failing the
+            # workflow and overwriting the winner's terminal state.
+            if [ "$HTTP_CODE" = "409" ] && \
+               [ "$(printf '%s' "$BODY" | jq -r '.code // empty' 2>/dev/null)" = "credentials_already_issued" ]; then
+              echo "vera-creds: another runner already owns this job; exiting gracefully"
+              touch /tmp/vera_graceful_exit
+              # Suppress the failsafe finalizer — the winning runner will
+              # post the terminal callback comment.
+              touch /tmp/vera_callback_sent
+              exit 0
+            fi
+            echo "::error::vera-creds: non-retryable HTTP ${HTTP_CODE} on attempt $((ATTEMPT + 1))"
+            printf '%s\n' "$BODY"
+            # Issue #3951: a 404 means this run was orphaned — the GHA run is
+            # live but no Job row was ever committed, so there is nothing to
+            # authenticate against. Retrying THIS run cannot help; only a fresh
+            # dispatch can. Write a specific reason so the failsafe finalizer
+            # below surfaces it instead of the misleading "retry the dispatch".
+            if [ "$HTTP_CODE" = "404" ]; then
+              printf '%s' "Vera job row not found (404): this run was orphaned (no backing job row was committed). A fresh dispatch is required — retrying this run cannot help." \
+                > /tmp/vera_step_failure_reason
+            else
+              printf '%s' "runner-credential-exchange-failed: non-retryable HTTP ${HTTP_CODE}" \
+                > /tmp/vera_step_failure_reason
+            fi
+            exit 1
+          done
+          if [ "$HTTP_CODE" = "410" ]; then
+            echo "Job was canceled by Vera, exiting gracefully"
+            # Mirror the credentials_already_issued path: leave a sentinel so
+            # the Run / Report-success / Report-failure steps below all
+            # short-circuit instead of running with an empty exec_script and
+            # firing a spurious failed callback on the already-terminated job.
+            touch /tmp/vera_graceful_exit
+            touch /tmp/vera_callback_sent
+            exit 0
+          fi
+          if [ "$(printf '%s' "$BODY" | jq -r '.status // empty')" != "ok" ]; then
+            echo "::error::Credential exchange returned a non-ok status"
+            printf '%s' "runner-credential-exchange-failed: credential exchange returned a non-ok status" \
+              > /tmp/vera_step_failure_reason
+            exit 1
+          fi
+          # Mask every secret BEFORE exporting it.
+          while IFS='=' read -r k v; do
+            [ -z "$k" ] && continue
+            echo "::add-mask::${v}"
+            echo "${k}=${v}" >> "$GITHUB_ENV"
+          done < <(printf '%s' "$BODY" | jq -r '.secrets // {} | to_entries[] | "\(.key)=\(.value)"')
+          # Non-secret env vars (verbatim).
+          printf '%s' "$BODY" | jq -r '.env // {} | to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+          # Opaque exec_script — the bootloader does not parse it.
+          umask 077
+          printf '%s' "$BODY" | jq -r '.exec_script // empty' > /tmp/vera_exec.sh
+          chmod +x /tmp/vera_exec.sh
+
+      - name: Run
+        env:
+          GH_TOKEN: ${{ env.GITHUB_APP_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ env.GITHUB_APP_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # Issue #3847: graceful-exit sentinel (set by 410 job-terminated or
+          # 409 credentials_already_issued in Fetch job package) skips the
+          # agent run entirely so the loser of a credentials race does not
+          # execute a missing /tmp/vera_exec.sh and fail the workflow.
+          if [ -f /tmp/vera_graceful_exit ]; then
+            echo "Graceful exit sentinel present — skipping agent run."
+            exit 0
+          fi
+          bash /tmp/vera_exec.sh
+
+      - name: Report success
+        if: success()
+        env:
+          VERA_JOB_ID: ${{ inputs.job_id }}
+          VERA_CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          VERA_API_URL: ${{ inputs.vera_api_url }}
+        run: |
+          # Issue #3847: skip success callback on graceful exit — the
+          # winning runner owns the job's terminal state.
+          if [ -f /tmp/vera_graceful_exit ]; then
+            echo "Graceful exit sentinel present — skipping success callback."
+            exit 0
+          fi
+          # Issue #4695: marshal the callback body with ``jq -n`` from plain
+          # shell string vars instead of splicing decoded (multi-line) error
+          # text into a hand-rolled JSON literal — string-splicing truncated the
+          # body, left a bare `n` where an escaped newline was stripped, and bled
+          # content across runs. All the STATUS/ERROR decision logic below stays;
+          # it just produces plain ``STATUS`` / ``ERROR_MSG`` strings that jq
+          # encodes safely.
+          STATUS="completed"
+          ERROR_MSG=""
+          HAVE_OUTCOME_ERROR=""
+          # An agent that could not proceed autonomously writes a
+          # needs_input outcome — surface it as awaiting_human (issue #2907).
+          # A failed outcome status (e.g. the exec_script outcome-file contract
+          # check, issue #2931) surfaces as failed and lifts .error into the
+          # callback. The agent-exit-code "failed" check below still wins over
+          # both — a real crash keeps its specific exit-code message.
+          if [ -f /tmp/vera_outcome.json ]; then
+            OUTCOME_STATUS=$(jq -r '.status // empty' /tmp/vera_outcome.json 2>/dev/null)
+            if [ "$OUTCOME_STATUS" = "needs_input" ]; then
+              STATUS="awaiting_human"
+            elif [ "$OUTCOME_STATUS" = "failed" ]; then
+              STATUS="failed"
+              # Issue #4881: the stall watchdog / model-progress writers use the
+              # `summary`/`failure_marker` outcome shape, not `.error`. Fall back
+              # to those so a stalled review's PR comment shows the informative
+              # "opencode made no progress" / `model_stall` context instead of
+              # only the generic exit-code reason.
+              OUTCOME_ERROR=$(jq -r '.error // .summary // .failure_marker // empty' /tmp/vera_outcome.json 2>/dev/null)
+              if [ -n "$OUTCOME_ERROR" ]; then
+                ERROR_MSG="$OUTCOME_ERROR"
+                HAVE_OUTCOME_ERROR="1"
+              fi
+            fi
+          fi
+
+          if [ -f /tmp/vera_agent_exit_code ]; then
+            AGENT_EC=$(tr -d '[:space:]' < /tmp/vera_agent_exit_code)
+            if [ -n "$AGENT_EC" ] && [ "$AGENT_EC" != "0" ]; then
+              STATUS="failed"
+              # Issue #4273: decode the runner exit code into a signal-aware
+              # reason so OOM/timeout/crash are distinguishable instead of an
+              # opaque "Agent exited with code N". The reason strings below are
+              # matched by _RUNNER_SIGNAL_REASON_SIGNATURES in
+              # src/vera/lifecycle/failure_classifier.py — keep them in lockstep:
+              # SIGKILL/SIGTERM/timeout classify as retryable transient infra,
+              # SIGSEGV/SIGABRT and bare exit 1 stay terminal. A signal is
+              # 128 + N in the runner exit code.
+              if [ "$AGENT_EC" -ge 128 ] 2>/dev/null; then
+                SIG=$((AGENT_EC - 128))
+                case "$SIG" in
+                  9) EXIT_REASON="Agent killed by signal SIGKILL (runner-killed-or-oom)" ;;
+                  15) EXIT_REASON="Agent killed by signal SIGTERM" ;;
+                  11) EXIT_REASON="Agent crashed with signal SIGSEGV" ;;
+                  6) EXIT_REASON="Agent crashed with signal SIGABRT" ;;
+                  *) EXIT_REASON="Agent killed by signal ${SIG} (exit ${AGENT_EC})" ;;
+                esac
+              elif [ "$AGENT_EC" = "124" ]; then
+                EXIT_REASON="Agent run timed out (exit 124 timeout)"
+              else
+                EXIT_REASON="Agent exited with code ${AGENT_EC} (no signal)"
+              fi
+              if [ -n "$HAVE_OUTCOME_ERROR" ]; then
+                # A richer outcome.error is already set (e.g. the opencode
+                # LLM-provider error, issue #3735) — keep it as the primary
+                # error and only annotate it with the decoded exit reason
+                # rather than clobbering it.
+                ERROR_MSG="${OUTCOME_ERROR} [${EXIT_REASON}]"
+              else
+                ERROR_MSG="$EXIT_REASON"
+              fi
+            fi
+          else
+            # Layer 2: a missing sentinel means we cannot prove the agent
+            # finished cleanly — treat it as a failure rather than greenwash.
+            STATUS="failed"
+            ERROR_MSG="Agent exit code unknown (sentinel missing)"
+          fi
+          # Issue #4853: persist the computed STATUS so the durable-outcome
+          # step below can stamp the artifact with the SAME status this callback
+          # reports — without re-deriving the signal logic. Written before the
+          # POST so it survives a failed callback (the case durability covers).
+          printf '%s' "$STATUS" > /tmp/vera_status
+          # Read the raw outcome JSON as a single compact object (or null) and
+          # let jq attach it — no shell string splicing into the JSON literal.
+          OUTCOME_JSON=$(jq -c . /tmp/vera_outcome.json 2>/dev/null || echo null)
+          PAYLOAD=$(jq -n \
+            --arg job_id "$VERA_JOB_ID" \
+            --arg token "$VERA_CALLBACK_TOKEN" \
+            --arg status "$STATUS" \
+            --arg error "$ERROR_MSG" \
+            --argjson outcome "${OUTCOME_JSON:-null}" \
+            '{job_id:$job_id, token:$token, status:$status}
+             + (if $error != "" then {error:$error} else {} end)
+             + (if $outcome != null then {outcome:$outcome} else {} end)')
+          # Layer 1+3: a failed callback POST must fail the step (loud, not a
+          # warning). On a confirmed 2xx, drop the sentinel that gates the
+          # failsafe finalizer below.
+          # Issue #4852: widen the retry budget (~100s of fixed-delay
+          # tolerance) so the outcome POST survives an `app` rolling deploy.
+          # `--retry-connrefused` is required because plain `--retry` does NOT
+          # cover a connection-refused while a machine restarts; `--retry-delay`
+          # forces a fixed (non-exponential) delay and `--connect-timeout`
+          # caps each attempt. Well under the 60-min job timeout / ~40-min
+          # sweep window. The loud-fail-on-exhaustion `else` branch is
+          # deliberate — do NOT soften it.
+          if curl -sf --retry 10 --retry-delay 10 --retry-connrefused --connect-timeout 10 \
+            -X POST "${VERA_API_URL}/internal/jobs/callback" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"; then
+            touch /tmp/vera_callback_sent
+          else
+            echo "::error::callback POST failed"
+            exit 1
+          fi
+
+      - name: Report failure
+        if: failure()
+        env:
+          VERA_JOB_ID: ${{ inputs.job_id }}
+          VERA_CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          VERA_API_URL: ${{ inputs.vera_api_url }}
+        run: |
+          # Issue #3847: never report failed for the loser of a credentials
+          # race — the winning runner is actively working the job. The 410
+          # job-terminated path also takes this branch so it does not
+          # double-mark an already-canceled job.
+          if [ -f /tmp/vera_graceful_exit ]; then
+            echo "Graceful exit sentinel present — skipping failure callback."
+            exit 0
+          fi
+          # Issue #3815: a prior step's specific reason (Fetch job package
+          # writes one on credential-exchange failure) wins over the opaque
+          # "Workflow failed" so the classifier can retry.
+          ERROR_MSG="Workflow failed"
+          if [ -f /tmp/vera_step_failure_reason ]; then
+            # Issue #4695: keep the DECODED text — never ``tr -d`` the backslash,
+            # which turns an escaped ``\n`` into a bare `n`. Cap length only.
+            REASON=$(head -c 500 < /tmp/vera_step_failure_reason)
+            if [ -n "$REASON" ]; then
+              ERROR_MSG="$REASON"
+            fi
+          elif [ -f /tmp/vera_outcome.json ]; then
+            # Issue #4404: a runtime step may force a non-zero exit (so this
+            # failure branch fires instead of "Report success") while writing
+            # ONLY /tmp/vera_outcome.json — e.g. the opencode error-JSON branch
+            # which records the redacted LLM-provider error plus
+            # failure_marker="opencode_error_json". Without this fallback that
+            # rich outcome is orphaned (Report success never runs) and the job
+            # surfaces the opaque "Workflow failed" → UNRECOGNIZED, mis-routing
+            # retry/alerting. Mirror the Report-success lift: pull .error and
+            # .failure_marker so the classifier sees the transient signal. The
+            # marker is appended so it reaches the reason-string classifier even
+            # when the provider message text is empty or unrecognized.
+            OUTCOME_STATUS=$(jq -r '.status // empty' /tmp/vera_outcome.json 2>/dev/null)
+            if [ "$OUTCOME_STATUS" = "failed" ]; then
+              # Issue #4881: fall back to `summary` when `.error` is absent so a
+              # stall outcome (which carries `summary`/`failure_marker`, not
+              # `.error`) yields an informative message rather than a bare marker.
+              OUTCOME_ERROR=$(jq -r '.error // .summary // empty' /tmp/vera_outcome.json 2>/dev/null)
+              OUTCOME_MARKER=$(jq -r '.failure_marker // empty' /tmp/vera_outcome.json 2>/dev/null)
+              # Issue #4695: keep the DECODED text — cap length only, never
+              # ``tr -d`` the backslash out of an escaped ``\n``.
+              CANDIDATE=$(printf '%s%s' "$OUTCOME_ERROR" "${OUTCOME_MARKER:+ [${OUTCOME_MARKER}]}" \
+                | head -c 500)
+              if [ -n "$CANDIDATE" ]; then
+                ERROR_MSG="$CANDIDATE"
+              fi
+            fi
+          fi
+          # Issue #4853: persist the reported status for the durable-outcome
+          # step (a failure callback always reports "failed").
+          printf 'failed' > /tmp/vera_status
+          # Issue #4695: marshal the body with ``jq -n`` so the decoded error
+          # (which may contain newlines, quotes, or backslashes) is encoded
+          # safely instead of spliced into a JSON literal.
+          # Issue #5278: forward the full outcome JSON (mirroring Report
+          # success) so fields beyond the flattened ERROR_MSG — notably an
+          # ``opencode_crash`` outcome's ``error_detail``/``duration_seconds``/
+          # ``gha_run_url`` — reach the server instead of being dropped on the
+          # floor. ``error_detail`` is internal-only (issue #4913 anti-leak);
+          # forwarding the raw outcome object here does not change that
+          # constraint, it is enforced server-side at render time.
+          OUTCOME_JSON=$(jq -c . /tmp/vera_outcome.json 2>/dev/null || echo null)
+          PAYLOAD=$(jq -n \
+            --arg job_id "$VERA_JOB_ID" \
+            --arg token "$VERA_CALLBACK_TOKEN" \
+            --arg error "$ERROR_MSG" \
+            --argjson outcome "${OUTCOME_JSON:-null}" \
+            '{job_id:$job_id, token:$token, status:"failed", error:$error}
+             + (if $outcome != null then {outcome:$outcome} else {} end)')
+          # Layer 1+3: a failed callback POST must fail the step (loud, not a
+          # warning). On a confirmed 2xx, drop the sentinel that gates the
+          # failsafe finalizer below.
+          # Issue #4852: widen the retry budget (~100s of fixed-delay
+          # tolerance) so the outcome POST survives an `app` rolling deploy.
+          # `--retry-connrefused` is required because plain `--retry` does NOT
+          # cover a connection-refused while a machine restarts; `--retry-delay`
+          # forces a fixed (non-exponential) delay and `--connect-timeout`
+          # caps each attempt. Well under the 60-min job timeout / ~40-min
+          # sweep window. The loud-fail-on-exhaustion `else` branch is
+          # deliberate — do NOT soften it.
+          if curl -sf --retry 10 --retry-delay 10 --retry-connrefused --connect-timeout 10 \
+            -X POST "${VERA_API_URL}/internal/jobs/callback" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"; then
+            touch /tmp/vera_callback_sent
+          else
+            echo "::error::callback POST failed"
+            exit 1
+          fi
+
+      - name: Write durable outcome
+        # Issue #4853: DURABLE outcome channel. When the callback POST above
+        # failed (the /tmp/vera_callback_sent sentinel is absent), the
+        # machine-readable outcome (plan body / verdict / PR) would otherwise be
+        # discarded and the job force-failed + re-run. Instead, persist it as a
+        # GitHub Actions artifact so the recovery reconciler can REPLAY the real
+        # outcome through the same server-side ingestion core before any
+        # force-fail. Gated on the SAME missing-sentinel condition as the
+        # Failsafe finalizer below so a delivered callback skips it entirely.
+        #
+        # The payload MUST NOT contain the callback token — it is stored durably
+        # and read back server-side against the already-authenticated job.
+        if: always()
+        env:
+          VERA_JOB_ID: ${{ inputs.job_id }}
+        run: |
+          if [ -f /tmp/vera_callback_sent ]; then
+            echo "Callback already delivered — no durable outcome needed."
+            exit 0
+          fi
+          if [ -f /tmp/vera_graceful_exit ]; then
+            echo "Graceful exit — another runner owns the terminal state."
+            exit 0
+          fi
+          # The callback steps persist the status they computed; default to
+          # "failed" when neither step ran (e.g. the runner died pre-callback).
+          STATUS="failed"
+          if [ -f /tmp/vera_status ]; then
+            FILE_STATUS=$(tr -d '[:space:]' < /tmp/vera_status)
+            if [ -n "$FILE_STATUS" ]; then
+              STATUS="$FILE_STATUS"
+            fi
+          fi
+          # Attach the real outcome JSON (or null) via jq — no string splicing.
+          OUTCOME_JSON=$(jq -c . /tmp/vera_outcome.json 2>/dev/null || echo null)
+          # Stamp the GHA run attempt + job_id for OBSERVABILITY and the
+          # server-side job_id cross-check (the replay refuses an artifact whose
+          # job_id names a different job). These fields are NOT an idempotency
+          # key: the server dedupes purely on terminal job status (a replay onto
+          # an already-terminal job is a no-op), never on ${{ github.run_attempt }}.
+          jq -n \
+            --arg job_id "$VERA_JOB_ID" \
+            --arg status "$STATUS" \
+            --arg attempt "${{ github.run_attempt }}" \
+            --argjson outcome "${OUTCOME_JSON:-null}" \
+            '{job_id:$job_id, status:$status, attempt:$attempt, outcome:$outcome}' \
+            > /tmp/vera_outcome_artifact.json
+          echo "Wrote durable outcome artifact for job ${VERA_JOB_ID} (status=${STATUS})"
+
+      - name: Upload durable outcome
+        # Uploads the file the step above writes ONLY when the callback was not
+        # delivered. When a callback landed (or a graceful exit occurred) the
+        # write step exits early without creating the file, so
+        # ``if-no-files-found: ignore`` makes this a no-op. Artifact name is kept
+        # in lockstep with ``DURABLE_OUTCOME_ARTIFACT_NAME`` in
+        # src/vera/github/actions_api.py.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vera-job-outcome
+          path: /tmp/vera_outcome_artifact.json
+          if-no-files-found: ignore
+
+      - name: Failsafe finalizer
+        # Layer 3: guarantee a visible result on the originating issue/PR even
+        # when the callback chain never ran (credential exchange failed, the
+        # runner died mid-step, etc). Gated on the /tmp/vera_callback_sent
+        # sentinel so it is a no-op whenever a callback already landed.
+        #
+        # Uses secrets.GITHUB_TOKEN deliberately — NOT env.GITHUB_APP_TOKEN,
+        # which is unset exactly when credential exchange fails (the case this
+        # step exists to cover). The originating issue/PR lives in the same
+        # customer repo this workflow runs in, and the job already declares
+        # `permissions: issues: write`, so the default token can comment.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORIGINATING_REF: ${{ inputs.originating_ref }}
+        run: |
+          if [ -f /tmp/vera_callback_sent ]; then
+            echo "Callback already reported — finalizer is a no-op."
+            exit 0
+          fi
+          if [ -z "$ORIGINATING_REF" ]; then
+            echo "::warning::No originating_ref provided — cannot post failsafe comment."
+            exit 0
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # Issue #3951: prefer a prior step's specific reason (e.g. the
+          # vera-creds 404 "orphaned run" message) over the generic body —
+          # "retry the dispatch" is actively wrong for a missing-row 404, where
+          # there is no row to authenticate against and only a fresh dispatch
+          # can help. Mirror the Report-failure callback step, which already
+          # reads this file. The generic fallback no longer claims that
+          # retrying THIS run will help.
+          BODY="Vera job exited without reporting a result — see the [job run](${RUN_URL}). This is an automated failsafe; a fresh dispatch may be required."
+          if [ -f /tmp/vera_step_failure_reason ]; then
+            # Issue #4695: this builds a Markdown comment (not JSON) — do NOT
+            # ``tr -d`` the ``"`` / ``\`` characters (stripping a backslash turns
+            # an escaped ``\n`` into a bare `n`). Cap length only.
+            REASON=$(head -c 500 < /tmp/vera_step_failure_reason)
+            if [ -n "$REASON" ]; then
+              BODY="${REASON} See the [job run](${RUN_URL})."
+            fi
+          fi
+          if [ -f /tmp/vera_agent.log ]; then
+            LOG_TAIL=$(tail -n 20 /tmp/vera_agent.log)
+            BODY="${BODY}"$'\n\n'"**Agent log tail**"$'\n\n'"\`\`\`"$'\n'"${LOG_TAIL}"$'\n'"\`\`\`"
+          fi
+          BODY="${BODY}"$'\n\n'"🤖 Generated with Claude Opus 4.7"
+          gh issue comment "$ORIGINATING_REF" --repo "$GITHUB_REPOSITORY" --body "$BODY"
