@@ -2,7 +2,7 @@
 
 Engine abstraction layer for spawning AI coding agent CLIs as subprocesses.
 
-Supports claude-code, opencode, codex, aider, and any CLI agent that accepts a prompt and runs in a workspace directory.
+Supports claude-code, opencode, codex, and any CLI agent that accepts a prompt and runs in a workspace directory.
 
 ## Design Principles
 
