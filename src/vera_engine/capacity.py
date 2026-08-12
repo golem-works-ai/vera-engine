@@ -1,8 +1,8 @@
 """Collect remaining capacity from each provider.
 
 OpenRouter: REST API for credit balance.
-Anthropic (Claude Code): parse `claude -p "/usage"` output.
-OpenAI: key presence only (no API available).
+Anthropic (Claude Code): parse ``claude -p "/usage"`` output.
+OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
 
@@ -127,9 +129,156 @@ def _parse_claude_usage(output: str) -> ProviderCapacity:
 
 def check_openai() -> ProviderCapacity:
     key = os.environ.get("OPENAI_API_KEY")
-    if not key:
-        return ProviderCapacity("openai", available=False, detail="no key")
-    return ProviderCapacity("openai", available=True, detail="API key set")
+    if key:
+        return ProviderCapacity("openai", available=True, detail="API key set")
+    cap = _check_codex_status()
+    if cap is not None:
+        return cap
+    return ProviderCapacity("openai", available=False, detail="no key and codex status unavailable")
+
+
+_TMUX_SESSION = "vera-engine-codex-status"
+_CODEX_POLL_INTERVAL = 0.5
+_CODEX_STARTUP_TIMEOUT = 15.0
+_CODEX_STATUS_TIMEOUT = 10.0
+_WEEKLY_PCT_RE = re.compile(r"Weekly limit:\s*\[.*?\]\s*(\d+)%\s*left")
+_ACCOUNT_RE = re.compile(r"Account:\s*\S+\s*\((\w+)\)")
+
+
+def _tmux_capture(session: str) -> str:
+    try:
+        r = subprocess.run(
+            ["tmux", "capture-pane", "-t", session, "-p", "-S", "-80"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _tmux_send(session: str, *keys: str) -> None:
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", session, *keys],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _tmux_send_literal(session: str, text: str) -> None:
+    """Send literal text (bypasses tmux key lookup)."""
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", session, "-l", text],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _tmux_kill(session: str) -> None:
+    try:
+        subprocess.run(
+            ["tmux", "kill-session", "-t", session],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def _check_codex_status() -> ProviderCapacity | None:
+    """Launch codex in tmux, send /status, parse weekly limit."""
+    if not shutil.which("codex"):
+        return None
+    if not shutil.which("tmux"):
+        logger.debug("tmux not available for codex status check")
+        return None
+
+    _tmux_kill(_TMUX_SESSION)
+    try:
+        r = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", _TMUX_SESSION, "-x", "120", "-y", "40"],
+            capture_output=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return None
+
+        _tmux_send(_TMUX_SESSION, "codex", "Enter")
+
+        # Wait for codex to finish starting (handle update prompt).
+        # The update prompt is a TUI select menu — arrow-key Down to
+        # "Skip", then Enter.  May need multiple attempts if the menu
+        # hasn't rendered yet.
+        update_dismissed = False
+        deadline = time.monotonic() + _CODEX_STARTUP_TIMEOUT
+        ready = False
+        while time.monotonic() < deadline:
+            time.sleep(_CODEX_POLL_INTERVAL)
+            buf = _tmux_capture(_TMUX_SESSION)
+            if not update_dismissed and "Update available" in buf and "Press enter" in buf:
+                _tmux_send(_TMUX_SESSION, "Down", "Enter")
+                update_dismissed = True
+                continue
+            if "OpenAI Codex" in buf and "/model to change" in buf:
+                ready = True
+                break
+
+        if not ready:
+            logger.debug("codex TUI did not reach ready state")
+            return None
+
+        time.sleep(0.5)
+        _tmux_send_literal(_TMUX_SESSION, "/status")
+        time.sleep(0.2)
+        _tmux_send(_TMUX_SESSION, "Enter")
+
+        # /status renders as a modal overlay. Poll for the weekly-limit
+        # line; send Enter to dismiss the overlay so it lands in the
+        # scrollback. Retry the dismiss a few times — the first Enter
+        # may arrive before the overlay has fully rendered.
+        dismiss_count = 0
+        deadline = time.monotonic() + _CODEX_STATUS_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(_CODEX_POLL_INTERVAL)
+            buf = _tmux_capture(_TMUX_SESSION)
+            parsed = _parse_codex_status(buf)
+            if parsed is not None:
+                return parsed
+            if "/status" in buf and dismiss_count < 3:
+                _tmux_send(_TMUX_SESSION, "Enter")
+                dismiss_count += 1
+
+        logger.debug("codex /status did not render in time")
+        return None
+    except Exception as exc:
+        logger.warning("codex status check failed: %s", exc)
+        return None
+    finally:
+        _tmux_kill(_TMUX_SESSION)
+
+
+def _parse_codex_status(output: str) -> ProviderCapacity | None:
+    """Extract weekly limit from codex /status output.
+
+    Returns None if the weekly-limit line hasn't rendered yet.
+    """
+    m = _WEEKLY_PCT_RE.search(output)
+    if m is None:
+        return None
+
+    remaining = int(m.group(1))
+
+    account_match = _ACCOUNT_RE.search(output)
+    plan = account_match.group(1) if account_match else "unknown"
+
+    return ProviderCapacity(
+        "openai",
+        available=remaining > 2,
+        remaining_pct=float(remaining),
+        detail=f"codex {plan}: {remaining}% weekly left",
+        auth_method="oauth",
+    )
 
 
 def check_all() -> dict[str, ProviderCapacity]:
