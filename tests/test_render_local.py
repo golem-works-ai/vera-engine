@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from vera_engine.credentials import CredentialBundle, SecretRef
+from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
 from vera_engine.render.local import (
     _build_base_env,
@@ -41,7 +41,7 @@ def test_resolve_env_mixed():
 def test_resolve_env_missing_secret_raises():
     env = {"SECRET": SecretRef("MISSING")}
     bundle = CredentialBundle(values={})
-    with pytest.raises(KeyError, match="MISSING"):
+    with pytest.raises(CredentialGuardError, match="MISSING"):
         _resolve_env(env, bundle)
 
 

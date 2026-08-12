@@ -3,7 +3,13 @@
 from vera_engine.auto_select import Selection, select_model
 from vera_engine.config import EngineConfig, load_config
 from vera_engine.request import AgentRunRequest
-from vera_engine.credentials import SecretRef, CredentialBundle
+from vera_engine.credentials import (
+    CredentialBundle,
+    CredentialGuardError,
+    FORBIDDEN_FIELD_PATTERN,
+    SecretRef,
+    assert_no_credential_shaped_fields,
+)
 from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
 from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, Tier, TIER_NAMES, get_catalog
 from vera_engine.selection import get_builder, list_engines
@@ -13,7 +19,9 @@ __all__ = [
     "AgentRunRequest",
     "CATALOG",
     "CredentialBundle",
+    "CredentialGuardError",
     "EngineConfig",
+    "FORBIDDEN_FIELD_PATTERN",
     "EngineInvocation",
     "MaterializedFile",
     "ModelSpec",
@@ -22,6 +30,7 @@ __all__ = [
     "SecretRef",
     "Tier",
     "TIER_NAMES",
+    "assert_no_credential_shaped_fields",
     "build_and_run",
     "get_builder",
     "list_engines",

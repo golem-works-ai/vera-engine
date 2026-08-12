@@ -193,3 +193,40 @@ def test_tier_none_includes_all():
     from vera_engine.models import get_catalog
     cheapest = min(s.blended_cost(config.input_weight) for s in get_catalog())
     assert sel.model.blended_cost(config.input_weight) == pytest.approx(cheapest)
+
+
+# ── exclude (model blacklist) ───────────────────────────────────────────────
+
+
+def test_exclude_skips_blacklisted_model():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        first = select_model(config)
+        second = select_model(config, exclude={first.model.model_id})
+    assert second.model.model_id != first.model.model_id
+
+
+def test_exclude_all_raises():
+    from vera_engine.models import get_catalog
+    all_ids = {s.model_id for s in get_catalog()}
+    config = EngineConfig(provider_ratios={})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        with pytest.raises(ValueError, match="no usable model"):
+            select_model(config, exclude=all_ids)
+
+
+def test_exclude_with_tier_picks_next_at_tier():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        first = select_model(config, tier=Tier.stone)
+        second = select_model(config, tier=Tier.stone, exclude={first.model.model_id})
+    assert second.model.tier >= Tier.stone
+    assert second.model.model_id != first.model.model_id
+
+
+def test_exclude_empty_set_is_noop():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        without = select_model(config)
+        with_empty = select_model(config, exclude=set())
+    assert without.model.model_id == with_empty.model.model_id

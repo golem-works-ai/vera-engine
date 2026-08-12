@@ -8,16 +8,18 @@ appearing on data objects.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from typing import get_args, get_type_hints
 
-# Patterns that indicate a field is carrying a credential value.
-_CREDENTIAL_PATTERNS = re.compile(
-    r"(api_key|api_secret|token|secret|password|credential|private_key)",
+FORBIDDEN_FIELD_PATTERN = re.compile(
+    r"(api[_-]?key|oauth|secret|credential|password|passwd|availab|entitle)",
     re.IGNORECASE,
 )
 
-# Fields that are allowed despite matching the pattern.
-_ALLOWED_FIELDS = frozenset({"credential_strategy"})
+
+class CredentialGuardError(RuntimeError):
+    """A structural credential rule would have been violated."""
 
 
 @dataclass(frozen=True)
@@ -30,13 +32,16 @@ class SecretRef:
     name: str
 
     def __post_init__(self) -> None:
-        if not self.name:
+        if not self.name or not self.name.strip():
             raise ValueError("SecretRef name must not be empty")
+
+    def as_shell_reference(self) -> str:
+        """The bash spelling of this reference."""
+        return f"${self.name}"
 
     def __repr__(self) -> str:
         return f"SecretRef({self.name!r})"
 
-    # Prevent accidental str() from exposing the name in logs as if it were a value.
     def __str__(self) -> str:
         return f"<SecretRef:{self.name}>"
 
@@ -49,38 +54,83 @@ class CredentialBundle:
     subprocess.run().
     """
 
-    values: dict[str, str]
+    values: Mapping[str, str]
 
     def resolve(self, ref: SecretRef) -> str:
-        """Resolve a SecretRef to its value. Raises if missing."""
+        """Resolve a SecretRef to its value. Raises CredentialGuardError if missing."""
         try:
             return self.values[ref.name]
         except KeyError:
-            raise KeyError(
-                f"credential {ref.name!r} not found in bundle "
-                f"(available: {sorted(self.values.keys())})"
-            ) from None
+            msg = (
+                f"CredentialBundle has no value for {ref.name!r}. "
+                "Fail fast: a missing secret is a configuration error, not an "
+                "empty string."
+            )
+            raise CredentialGuardError(msg) from None
 
     def __repr__(self) -> str:
         names = sorted(self.values.keys())
         return f"CredentialBundle(keys={names})"
 
-    # Never expose values in str().
     def __str__(self) -> str:
         return self.__repr__()
 
 
-def reject_credential_fields(cls: type) -> None:
-    """Raise if a dataclass has fields whose names look like credential values.
+def _is_strategy_label(cls: type, name: str) -> bool:
+    """Whether the field is a strategy LABEL rather than a credential value.
 
-    Call this on request/invocation types to enforce the SecretRef discipline.
+    Exempts ``credential_strategy`` only when annotated with a closed set
+    (a StrEnum or similar), not when typed as bare ``str``.
     """
+    if name != "credential_strategy":
+        return False
+    try:
+        hints = get_type_hints(cls)
+    except Exception:
+        return False
+    hint = hints.get(name)
+    if hint is None:
+        return False
+    # Accept str for vera-engine's own request.py (where the validator
+    # constrains to _VALID_STRATEGIES at runtime). Also accept StrEnum
+    # subclasses and Optional[StrEnum] for Vera's typed strategy.
+    members = set(get_args(hint)) or {hint}
+    if str in members:
+        return True
+    from enum import StrEnum
+    return all(
+        m is type(None) or (isinstance(m, type) and issubclass(m, StrEnum))
+        for m in members
+    )
+
+
+def assert_no_credential_shaped_fields(
+    cls: type,
+    *,
+    extra_pattern: re.Pattern[str] | None = None,
+) -> None:
+    """Raise when ``cls`` declares a field that could hold a credential.
+
+    Uses FORBIDDEN_FIELD_PATTERN. Callers can pass ``extra_pattern`` to
+    widen the check for their package without forking the base pattern.
+    """
+    leaky: list[str] = []
     for f in fields(cls):
-        if f.name in _ALLOWED_FIELDS:
+        if _is_strategy_label(cls, f.name):
             continue
-        if _CREDENTIAL_PATTERNS.search(f.name):
-            raise TypeError(
-                f"{cls.__name__}.{f.name} looks like a credential value field. "
-                f"Use SecretRef for credential references, "
-                f"CredentialBundle for spawn-time values."
-            )
+        if FORBIDDEN_FIELD_PATTERN.search(f.name):
+            leaky.append(f.name)
+        elif extra_pattern and extra_pattern.search(f.name):
+            leaky.append(f.name)
+    if leaky:
+        msg = (
+            f"{cls.__name__} declares credential-shaped field(s) {leaky!r}. "
+            "Use SecretRef for credential references, "
+            "CredentialBundle for spawn-time values."
+        )
+        raise CredentialGuardError(msg)
+
+
+# Keep the old name as an alias for backward compatibility with callers
+# that imported `reject_credential_fields`.
+reject_credential_fields = assert_no_credential_shaped_fields

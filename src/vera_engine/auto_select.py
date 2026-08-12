@@ -28,6 +28,7 @@ def select_model(
     engine: str | None = None,
     provider: str | None = None,
     tier: Tier | None = None,
+    exclude: frozenset[str] | set[str] | None = None,
 ) -> Selection:
     """Pick the cheapest model at or above the requested tier.
 
@@ -35,14 +36,21 @@ def select_model(
     considered. This is the minimum capability floor — ``--tier stone``
     includes stone, bronze, and iron models.
 
+    ``exclude`` is a set of model IDs to skip. Vera uses this for retry
+    after failure: blacklist the model that just failed, call again with
+    the same tier, and vera-engine picks the next cheapest.
+
     Returns a Selection with the model, inferred credential strategy,
     and effective cost. Raises ValueError if nothing is usable.
     """
     capacities = check_all()
     usable = _usable_providers(capacities)
+    excluded = exclude or set()
     candidates: list[tuple[float, str, ModelSpec]] = []
 
     for spec in get_catalog():
+        if spec.model_id in excluded:
+            continue
         if engine and spec.engine != engine:
             continue
         if provider and spec.provider != provider:
