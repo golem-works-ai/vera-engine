@@ -76,6 +76,13 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
               "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
     _ModelDef("claude-sonnet-5", "claude-code", "anthropic",
               "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    # 4.6 models use ~30% fewer tokens per task. Costs are token-adjusted
+    # (actual $/MTok * 0.7) to reflect per-task savings. No live pricing
+    # override — the adjustment is the point.
+    _ModelDef("claude-opus-4-6", "claude-code", "anthropic",
+              "", 3.50, 17.50, Tier.bronze),
+    _ModelDef("claude-sonnet-4-6", "claude-code", "anthropic",
+              "", 2.10, 10.50, Tier.stone),
     _ModelDef("claude-haiku-4-5-20251001", "claude-code", "anthropic",
               "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
     # OpenAI via codex
@@ -89,6 +96,10 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
               "openrouter", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
     _ModelDef("openrouter/anthropic/claude-sonnet-5", "opencode",
               "openrouter", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    _ModelDef("openrouter/anthropic/claude-opus-4.6", "opencode",
+              "openrouter", "", 3.50, 17.50, Tier.bronze),
+    _ModelDef("openrouter/anthropic/claude-sonnet-4.6", "opencode",
+              "openrouter", "", 2.10, 10.50, Tier.stone),
     _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode",
               "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
     _ModelDef("openrouter/moonshotai/kimi-k3", "opencode",
