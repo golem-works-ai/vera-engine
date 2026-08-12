@@ -70,13 +70,37 @@ class _ModelDef:
 
 _MODEL_DEFS: tuple[_ModelDef, ...] = (
     # Anthropic direct via claude-code
-    _ModelDef("claude-opus-5", "claude-code", "anthropic", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
-    _ModelDef("claude-sonnet-5", "claude-code", "anthropic", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
-    _ModelDef("claude-haiku-4-5-20251001", "claude-code", "anthropic", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
+    _ModelDef("claude-fable-5", "claude-code", "anthropic",
+              "anthropic/claude-fable-5", 10.0, 25.0, Tier.iron),
+    _ModelDef("claude-opus-5", "claude-code", "anthropic",
+              "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
+    _ModelDef("claude-sonnet-5", "claude-code", "anthropic",
+              "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    _ModelDef("claude-haiku-4-5-20251001", "claude-code", "anthropic",
+              "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
+    # OpenAI via codex
+    _ModelDef("gpt-5.6-sol", "codex", "openai", "openai/gpt-5.6-sol", 5.0, 30.0, Tier.bronze),
+    _ModelDef("gpt-5.6-terra", "codex", "openai", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone),
+    _ModelDef("gpt-5.6-luna", "codex", "openai", "openai/gpt-5.6-luna", 0.10, 0.60, Tier.clay),
     # OpenRouter via opencode
-    _ModelDef("openrouter/anthropic/claude-opus-5", "opencode", "openrouter", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
-    _ModelDef("openrouter/anthropic/claude-sonnet-5", "opencode", "openrouter", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
-    _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode", "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
+    _ModelDef("openrouter/anthropic/claude-fable-5", "opencode",
+              "openrouter", "anthropic/claude-fable-5", 5.0, 25.0, Tier.iron),
+    _ModelDef("openrouter/anthropic/claude-opus-5", "opencode",
+              "openrouter", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
+    _ModelDef("openrouter/anthropic/claude-sonnet-5", "opencode",
+              "openrouter", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode",
+              "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
+    _ModelDef("openrouter/moonshotai/kimi-k3", "opencode",
+              "openrouter", "moonshotai/kimi-k3", 3.0, 15.0, Tier.stone),
+    _ModelDef("openrouter/moonshotai/kimi-k2.7-code", "opencode",
+              "openrouter", "moonshotai/kimi-k2.7-code", 0.67, 3.40, Tier.clay),
+    _ModelDef("openrouter/openai/gpt-5.6-sol", "opencode",
+              "openrouter", "openai/gpt-5.6-sol", 5.0, 30.0, Tier.bronze),
+    _ModelDef("openrouter/openai/gpt-5.6-terra", "opencode",
+              "openrouter", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone),
+    _ModelDef("openrouter/openai/gpt-5.6-luna", "opencode",
+              "openrouter", "openai/gpt-5.6-luna", 0.10, 0.60, Tier.clay),
 )
 
 

@@ -178,11 +178,12 @@ def test_tier_bronze_selects_opus():
     assert "opus" in sel.model.model_id
 
 
-def test_tier_iron_raises_no_models():
-    config = EngineConfig(provider_ratios={})
+def test_tier_iron_selects_fable():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
-        with pytest.raises(ValueError, match="no usable model"):
-            select_model(config, tier=Tier.iron)
+        sel = select_model(config, tier=Tier.iron)
+    assert sel.model.tier >= Tier.iron
+    assert "fable" in sel.model.model_id
 
 
 def test_tier_none_includes_all():
