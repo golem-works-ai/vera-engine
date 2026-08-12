@@ -18,7 +18,7 @@ class CodexBuilder(EngineBuilder):
         return frozenset({"env-key", "none"})
 
     def default_model(self) -> str | None:
-        return "o4-mini"
+        return None
 
     def build_invocation(
         self, request: AgentRunRequest, strategy: str
@@ -27,7 +27,7 @@ class CodexBuilder(EngineBuilder):
 
         model = request.model or self.default_model()
 
-        argv: list[str] = ["codex", "--quiet"]
+        argv: list[str] = ["codex", "exec"]
         if model:
             argv.extend(["--model", model])
         argv.append(request.prompt)
@@ -35,8 +35,6 @@ class CodexBuilder(EngineBuilder):
         env: dict[str, str | SecretRef] = {}
 
         if strategy == "env-key":
-            # Codex supports both OpenAI and Anthropic models.
-            # Provide both keys; the engine uses whichever matches the model.
             env["OPENAI_API_KEY"] = SecretRef("OPENAI_API_KEY")
 
         for k, v in request.extra_env.items():
@@ -48,6 +46,6 @@ class CodexBuilder(EngineBuilder):
             argv=tuple(argv),
             env=env,
             workdir=request.workspace,
-            home_strategy="hermetic",
+            home_strategy="real",
             timeout_seconds=request.timeout_seconds,
         )

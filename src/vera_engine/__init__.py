@@ -1,22 +1,31 @@
 """vera-engine: Engine abstraction layer for AI coding agent CLIs."""
 
+from vera_engine.auto_select import Selection, select_model
+from vera_engine.config import EngineConfig, load_config
 from vera_engine.request import AgentRunRequest
 from vera_engine.credentials import SecretRef, CredentialBundle
 from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, get_catalog
 from vera_engine.selection import get_builder, list_engines
 from vera_engine.render.local import render_local
 
 __all__ = [
     "AgentRunRequest",
-    "SecretRef",
+    "CATALOG",
     "CredentialBundle",
+    "EngineConfig",
     "EngineInvocation",
     "MaterializedFile",
+    "ModelSpec",
+    "PROVIDER_CREDENTIALS",
     "RunResult",
+    "SecretRef",
+    "build_and_run",
     "get_builder",
     "list_engines",
+    "load_config",
     "render_local",
-    "build_and_run",
+    "select_model",
 ]
 
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
@@ -29,17 +27,10 @@ class OpenCodeBuilder(EngineBuilder):
 
         model = request.model or self.default_model()
 
-        # OpenCode reads its prompt from a file via -f.
-        prompt_file = MaterializedFile(
-            relative_path=".vera-engine-prompt.md",
-            content=request.prompt,
-            cleanup=True,
-        )
-
         argv: list[str] = ["opencode"]
         if model:
             argv.extend(["-m", model])
-        argv.extend(["-f", ".vera-engine-prompt.md"])
+        argv.extend(["run", request.prompt])
 
         env: dict[str, str | SecretRef] = {}
 
@@ -48,9 +39,9 @@ class OpenCodeBuilder(EngineBuilder):
         elif strategy == "proxy":
             env["OPENROUTER_API_KEY"] = SecretRef("OPENROUTER_API_KEY")
 
-        # Materialize opencode.json config if using a proxy.
-        files: list[MaterializedFile] = [prompt_file]
+        files: list[MaterializedFile] = []
         if strategy == "proxy":
+            import json
             config = {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
             files.append(
                 MaterializedFile(

@@ -129,6 +129,7 @@ def render_local(
                 list(invocation.argv),
                 cwd=str(invocation.workdir),
                 env=full_env,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=invocation.timeout_seconds,

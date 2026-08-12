@@ -7,7 +7,11 @@ import os
 import sys
 from pathlib import Path
 
+from vera_engine.auto_select import select_model
+from vera_engine.capacity import check_all
+from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
+from vera_engine.models import get_catalog
 from vera_engine.request import AgentRunRequest
 from vera_engine.selection import get_builder, list_engines
 from vera_engine.render.local import render_local
@@ -24,9 +28,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser = sub.add_parser("run", help="Run an engine")
     run_parser.add_argument(
         "--engine",
-        required=True,
         choices=list_engines(),
-        help="Engine to run",
+        help="Engine to run (auto-selected if omitted)",
     )
     run_parser.add_argument(
         "--prompt",
@@ -66,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # "list" subcommand
     sub.add_parser("list", help="List available engines")
 
+    # "models" subcommand
+    sub.add_parser("models", help="List models with effective costs")
+
+    # "capacity" subcommand
+    sub.add_parser("capacity", help="Check remaining capacity per provider")
+
     return parser
 
 
@@ -98,6 +107,34 @@ def _collect_credentials(invocation: "EngineInvocation") -> CredentialBundle:
     return CredentialBundle(values=values)
 
 
+def _cmd_models(workspace: Path) -> int:
+    config = load_config(workspace)
+    w = config.input_weight
+    rows: list[tuple[float, str, str, str, float, float, float, float]] = []
+    for spec in get_catalog():
+        ratio = config.cost_ratio(spec.provider)
+        effective = spec.effective_cost(ratio, w)
+        rows.append((effective, spec.model_id, spec.engine, spec.provider, spec.input_cost, spec.output_cost, ratio, effective))
+    rows.sort()
+
+    print(f"input_weight: {w}")
+    print(f"{'model':<50} {'engine':<14} {'provider':<12} {'input':>7} {'output':>8} {'ratio':>6} {'effective':>10}")
+    print("-" * 111)
+    for _, model_id, engine, provider, inp, out, ratio, eff in rows:
+        print(f"{model_id:<50} {engine:<14} {provider:<12} {inp:>6.2f} {out:>7.2f} {ratio:>6.3f} {eff:>9.2f}")
+    return 0
+
+
+def _cmd_capacity() -> int:
+    capacities = check_all()
+    for provider, cap in capacities.items():
+        status = "ok" if cap.available else "unavailable"
+        pct = f"{cap.remaining_pct:.0f}%" if cap.remaining_pct is not None else "-"
+        usd = f"${cap.remaining_usd:.2f}" if cap.remaining_usd is not None else "-"
+        print(f"{provider:<14} {status:<14} {pct:>6}  {usd:>10}  {cap.detail}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -106,6 +143,13 @@ def main(argv: list[str] | None = None) -> int:
         for name in list_engines():
             print(name)
         return 0
+
+    if args.command == "models":
+        workspace = getattr(args, "workspace", None) or Path(".")
+        return _cmd_models(workspace)
+
+    if args.command == "capacity":
+        return _cmd_capacity()
 
     if args.command != "run":
         parser.print_help()
@@ -123,14 +167,34 @@ def main(argv: list[str] | None = None) -> int:
         print("error: one of --prompt or --prompt-file is required", file=sys.stderr)
         return 1
 
+    workspace = args.workspace.resolve()
+    config = load_config(workspace)
+
+    engine = args.engine
+    model = args.model
+    strategy = args.strategy
+
+    if not engine and not model:
+        sel = select_model(config, engine=engine)
+        engine = sel.model.engine
+        model = sel.model.model_id
+        strategy = sel.strategy
+        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy})", file=sys.stderr)
+    elif not engine:
+        matching = [s for s in get_catalog() if s.model_id == model]
+        if not matching:
+            print(f"error: unknown model {model!r} — specify --engine explicitly", file=sys.stderr)
+            return 1
+        engine = matching[0].engine
+
     request = AgentRunRequest(
-        engine=args.engine,
+        engine=engine,
         prompt=prompt,
-        workspace=args.workspace.resolve(),
-        model=args.model,
+        workspace=workspace,
+        model=model,
         effort=args.effort,
         timeout_seconds=args.timeout,
-        credential_strategy=args.strategy,
+        credential_strategy=strategy,
     )
 
     builder = get_builder(request.engine)

@@ -24,10 +24,10 @@ class ClaudeCodeBuilder(EngineBuilder):
 
     @property
     def supported_strategies(self) -> frozenset[str]:
-        return frozenset({"env-key", "proxy"})
+        return frozenset({"env-key", "proxy", "none"})
 
     def default_model(self) -> str | None:
-        return None  # Claude Code picks its own default.
+        return None
 
     def build_invocation(
         self, request: AgentRunRequest, strategy: str
@@ -54,6 +54,7 @@ class ClaudeCodeBuilder(EngineBuilder):
         elif strategy == "proxy":
             env["ANTHROPIC_API_KEY"] = SecretRef("ANTHROPIC_API_KEY")
             env["ANTHROPIC_BASE_URL"] = SecretRef("ANTHROPIC_BASE_URL")
+        # "none" strategy: no credentials injected, uses local OAuth session.
 
         env["CLAUDE_CODE_EFFORT_LEVEL"] = _EFFORT_MAP[request.effort]
 
@@ -61,12 +62,15 @@ class ClaudeCodeBuilder(EngineBuilder):
             if k not in env:
                 env[k] = v
 
+        # OAuth session lives in ~/.claude, so we need the real HOME.
+        home = "hermetic" if strategy in ("env-key", "proxy") else "real"
+
         return EngineInvocation(
             engine=self.engine_name,
             argv=tuple(argv),
             env=env,
             workdir=request.workspace,
-            home_strategy="hermetic",
+            home_strategy=home,
             timeout_seconds=request.timeout_seconds,
             files=(prompt_file,),
             prompt_path=prompt_path,

@@ -16,7 +16,7 @@ from vera_engine.request import AgentRunRequest
 
 def test_claude_code_supported_strategies():
     builder = ClaudeCodeBuilder()
-    assert builder.supported_strategies == frozenset({"env-key", "proxy"})
+    assert builder.supported_strategies == frozenset({"env-key", "proxy", "none"})
 
 
 def test_claude_code_default_model_is_none():
@@ -49,10 +49,12 @@ def test_claude_code_proxy_strategy(tmp_path):
     assert inv.env["ANTHROPIC_BASE_URL"] == SecretRef("ANTHROPIC_BASE_URL")
 
 
-def test_claude_code_unsupported_strategy_raises(tmp_path):
-    req = AgentRunRequest(engine="claude-code", prompt="x", workspace=tmp_path)
-    with pytest.raises(ValueError, match="does not support credential_strategy='none'"):
-        ClaudeCodeBuilder().build_invocation(req, "none")
+def test_claude_code_none_strategy_uses_real_home(tmp_path):
+    req = AgentRunRequest(engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="none")
+    inv = ClaudeCodeBuilder().build_invocation(req, "none")
+    assert inv.home_strategy == "real"
+    secret_refs = [v for v in inv.env.values() if isinstance(v, SecretRef)]
+    assert len(secret_refs) == 0
 
 
 def test_claude_code_model_override(tmp_path):
@@ -97,14 +99,12 @@ def test_opencode_env_key_strategy(tmp_path):
         "opencode",
         "-m",
         "openrouter/anthropic/claude-sonnet-4",
-        "-f",
-        ".vera-engine-prompt.md",
+        "run",
+        "do stuff",
     )
     assert inv.env["OPENROUTER_API_KEY"] == SecretRef("OPENROUTER_API_KEY")
     assert "ANTHROPIC_BASE_URL" not in inv.env
-    assert len(inv.files) == 1
-    assert inv.files[0].relative_path == ".vera-engine-prompt.md"
-    assert inv.files[0].content == "do stuff"
+    assert len(inv.files) == 0
 
 
 def test_opencode_proxy_strategy_adds_config_file(tmp_path):
@@ -115,8 +115,8 @@ def test_opencode_proxy_strategy_adds_config_file(tmp_path):
 
     assert inv.env["OPENROUTER_API_KEY"] == SecretRef("OPENROUTER_API_KEY")
     assert inv.env["ANTHROPIC_BASE_URL"] == SecretRef("ANTHROPIC_BASE_URL")
-    assert len(inv.files) == 2
-    config_file = next(f for f in inv.files if f.relative_path == "opencode.json")
+    assert len(inv.files) == 1
+    config_file = inv.files[0]
     config = json.loads(config_file.content)
     assert config == {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
 
@@ -150,14 +150,14 @@ def test_codex_supported_strategies():
 
 
 def test_codex_default_model():
-    assert CodexBuilder().default_model() == "o4-mini"
+    assert CodexBuilder().default_model() is None
 
 
 def test_codex_env_key_strategy(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="fix the bug", workspace=tmp_path)
     inv = CodexBuilder().build_invocation(req, "env-key")
 
-    assert inv.argv == ("codex", "--quiet", "--model", "o4-mini", "fix the bug")
+    assert inv.argv == ("codex", "exec", "fix the bug")
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
     assert inv.files == ()
     assert inv.prompt_path is None

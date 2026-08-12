@@ -18,9 +18,9 @@ def test_parser_list_command():
     assert args.command == "list"
 
 
-def test_parser_run_requires_engine():
-    with pytest.raises(SystemExit):
-        _build_parser().parse_args(["run", "--prompt", "hi"])
+def test_parser_run_engine_is_optional():
+    args = _build_parser().parse_args(["run", "--prompt", "hi"])
+    assert args.engine is None
 
 
 def test_parser_run_rejects_unknown_engine():
