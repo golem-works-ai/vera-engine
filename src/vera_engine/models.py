@@ -1,18 +1,33 @@
-"""Model catalog with cost data.
+"""Model catalog with cost data and capability tiers.
 
 All pricing comes from the OpenRouter API (cached 24h, stdlib-only fetch).
 Hardcoded fallbacks cover offline/failure scenarios.
 
 Cost blending uses input_weight from config (default 0.8) to reflect that
 coding agent runs are ~80% input tokens by volume.
+
+Tiers represent rough capability bands (ascending):
+  clay < stone < bronze < iron
+Selecting --tier X includes all models at tier X or above.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import IntEnum
 
 logger = logging.getLogger(__name__)
+
+
+class Tier(IntEnum):
+    clay = 0
+    stone = 1
+    bronze = 2
+    iron = 3
+
+
+TIER_NAMES: tuple[str, ...] = tuple(t.name for t in Tier)
 
 
 @dataclass(frozen=True)
@@ -24,6 +39,7 @@ class ModelSpec:
     provider: str
     input_cost: float
     output_cost: float
+    tier: Tier
 
     def blended_cost(self, input_weight: float = 0.8) -> float:
         return self.input_cost * input_weight + self.output_cost * (1 - input_weight)
@@ -49,17 +65,18 @@ class _ModelDef:
     openrouter_id: str
     fallback_input: float
     fallback_output: float
+    tier: Tier
 
 
 _MODEL_DEFS: tuple[_ModelDef, ...] = (
     # Anthropic direct via claude-code
-    _ModelDef("claude-opus-5", "claude-code", "anthropic", "anthropic/claude-opus-5", 5.0, 25.0),
-    _ModelDef("claude-sonnet-5", "claude-code", "anthropic", "anthropic/claude-sonnet-5", 2.0, 10.0),
-    _ModelDef("claude-haiku-4-5-20251001", "claude-code", "anthropic", "anthropic/claude-haiku-4.5", 1.0, 5.0),
+    _ModelDef("claude-opus-5", "claude-code", "anthropic", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
+    _ModelDef("claude-sonnet-5", "claude-code", "anthropic", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    _ModelDef("claude-haiku-4-5-20251001", "claude-code", "anthropic", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
     # OpenRouter via opencode
-    _ModelDef("openrouter/anthropic/claude-opus-5", "opencode", "openrouter", "anthropic/claude-opus-5", 5.0, 25.0),
-    _ModelDef("openrouter/anthropic/claude-sonnet-5", "opencode", "openrouter", "anthropic/claude-sonnet-5", 2.0, 10.0),
-    _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode", "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0),
+    _ModelDef("openrouter/anthropic/claude-opus-5", "opencode", "openrouter", "anthropic/claude-opus-5", 5.0, 25.0, Tier.bronze),
+    _ModelDef("openrouter/anthropic/claude-sonnet-5", "opencode", "openrouter", "anthropic/claude-sonnet-5", 2.0, 10.0, Tier.stone),
+    _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode", "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
 )
 
 
@@ -82,6 +99,7 @@ def get_catalog() -> tuple[ModelSpec, ...]:
             provider=d.provider,
             input_cost=costs[0],
             output_cost=costs[1],
+            tier=d.tier,
         )
         for d in _MODEL_DEFS
         for costs in [_resolve_costs(d)]

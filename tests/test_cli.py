@@ -33,10 +33,21 @@ def test_parser_run_defaults():
     assert args.engine == "codex"
     assert args.prompt == "hi"
     assert args.model is None
+    assert args.tier is None
     assert args.effort == "high"
     assert args.workspace == Path(".")
     assert args.timeout == 2400
     assert args.strategy == "env-key"
+
+
+def test_parser_run_tier():
+    args = _build_parser().parse_args(["run", "--prompt", "hi", "--tier", "stone"])
+    assert args.tier == "stone"
+
+
+def test_parser_run_rejects_bad_tier():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["run", "--prompt", "hi", "--tier", "diamond"])
 
 
 def test_parser_run_all_options():

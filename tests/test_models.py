@@ -2,11 +2,11 @@
 
 import pytest
 
-from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, get_catalog
+from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, Tier, TIER_NAMES, get_catalog
 
 
 def test_model_spec_blended_cost():
-    spec = ModelSpec("test", "test-engine", "test-provider", 2.0, 10.0)
+    spec = ModelSpec("test", "test-engine", "test-provider", 2.0, 10.0, Tier.stone)
     assert spec.blended_cost() == pytest.approx(3.6)
     assert spec.blended_cost(0.5) == pytest.approx(6.0)
     assert spec.blended_cost(1.0) == pytest.approx(2.0)
@@ -14,8 +14,21 @@ def test_model_spec_blended_cost():
 
 
 def test_model_spec_effective_cost():
-    spec = ModelSpec("test", "test-engine", "test-provider", 2.0, 10.0)
+    spec = ModelSpec("test", "test-engine", "test-provider", 2.0, 10.0, Tier.stone)
     assert spec.effective_cost(0.5, 0.8) == pytest.approx(1.8)
+
+
+def test_tier_ordering():
+    assert Tier.clay < Tier.stone < Tier.bronze < Tier.iron
+
+
+def test_tier_names():
+    assert TIER_NAMES == ("clay", "stone", "bronze", "iron")
+
+
+def test_all_catalog_models_have_valid_tier():
+    for spec in CATALOG:
+        assert isinstance(spec.tier, Tier), f"{spec.model_id} has invalid tier"
 
 
 def test_catalog_not_empty():

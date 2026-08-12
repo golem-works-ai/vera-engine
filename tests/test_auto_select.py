@@ -7,6 +7,7 @@ import pytest
 from vera_engine.auto_select import select_model, _usable_providers, _LOW_PCT_THRESHOLD, _LOW_USD_THRESHOLD
 from vera_engine.capacity import ProviderCapacity
 from vera_engine.config import EngineConfig
+from vera_engine.models import Tier
 
 
 def _cap(provider, available=True, pct=None, usd=None, detail="", auth="api-key"):
@@ -160,3 +161,34 @@ def test_usable_providers_filters_low_usd():
         "openrouter": _cap("openrouter", usd=_LOW_USD_THRESHOLD - 0.5),
     }
     assert _usable_providers(caps) == set()
+
+
+def test_tier_stone_excludes_clay():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        sel = select_model(config, tier=Tier.stone)
+    assert sel.model.tier >= Tier.stone
+
+
+def test_tier_bronze_selects_opus():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        sel = select_model(config, tier=Tier.bronze)
+    assert sel.model.tier >= Tier.bronze
+    assert "opus" in sel.model.model_id
+
+
+def test_tier_iron_raises_no_models():
+    config = EngineConfig(provider_ratios={})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        with pytest.raises(ValueError, match="no usable model"):
+            select_model(config, tier=Tier.iron)
+
+
+def test_tier_none_includes_all():
+    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        sel = select_model(config, tier=None)
+    from vera_engine.models import get_catalog
+    cheapest = min(s.blended_cost(config.input_weight) for s in get_catalog())
+    assert sel.model.blended_cost(config.input_weight) == pytest.approx(cheapest)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from vera_engine.capacity import ProviderCapacity, check_all
 from vera_engine.config import EngineConfig
-from vera_engine.models import ModelSpec, get_catalog
+from vera_engine.models import ModelSpec, Tier, get_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,13 @@ def select_model(
     *,
     engine: str | None = None,
     provider: str | None = None,
+    tier: Tier | None = None,
 ) -> Selection:
-    """Pick the cheapest model with available capacity.
+    """Pick the cheapest model at or above the requested tier.
+
+    When tier is set, only models with tier >= the requested tier are
+    considered. This is the minimum capability floor — ``--tier stone``
+    includes stone, bronze, and iron models.
 
     Returns a Selection with the model, inferred credential strategy,
     and effective cost. Raises ValueError if nothing is usable.
@@ -41,6 +46,8 @@ def select_model(
         if engine and spec.engine != engine:
             continue
         if provider and spec.provider != provider:
+            continue
+        if tier is not None and spec.tier < tier:
             continue
         if spec.provider not in usable:
             continue

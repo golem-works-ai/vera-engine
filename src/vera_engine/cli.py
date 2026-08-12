@@ -11,7 +11,7 @@ from vera_engine.auto_select import select_model
 from vera_engine.capacity import check_all
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
-from vera_engine.models import get_catalog
+from vera_engine.models import Tier, TIER_NAMES, get_catalog
 from vera_engine.request import AgentRunRequest
 from vera_engine.selection import get_builder, list_engines
 from vera_engine.render.local import render_local
@@ -42,6 +42,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read prompt from file",
     )
     run_parser.add_argument("--model", help="Model override")
+    run_parser.add_argument(
+        "--tier",
+        choices=TIER_NAMES,
+        help="Minimum capability tier (clay < stone < bronze < iron)",
+    )
     run_parser.add_argument(
         "--effort",
         default="high",
@@ -110,18 +115,18 @@ def _collect_credentials(invocation: "EngineInvocation") -> CredentialBundle:
 def _cmd_models(workspace: Path) -> int:
     config = load_config(workspace)
     w = config.input_weight
-    rows: list[tuple[float, str, str, str, float, float, float, float]] = []
+    rows: list[tuple[float, str, str, str, str, float, float, float, float]] = []
     for spec in get_catalog():
         ratio = config.cost_ratio(spec.provider)
         effective = spec.effective_cost(ratio, w)
-        rows.append((effective, spec.model_id, spec.engine, spec.provider, spec.input_cost, spec.output_cost, ratio, effective))
+        rows.append((effective, spec.model_id, spec.engine, spec.provider, spec.tier.name, spec.input_cost, spec.output_cost, ratio, effective))
     rows.sort()
 
     print(f"input_weight: {w}")
-    print(f"{'model':<50} {'engine':<14} {'provider':<12} {'input':>7} {'output':>8} {'ratio':>6} {'effective':>10}")
-    print("-" * 111)
-    for _, model_id, engine, provider, inp, out, ratio, eff in rows:
-        print(f"{model_id:<50} {engine:<14} {provider:<12} {inp:>6.2f} {out:>7.2f} {ratio:>6.3f} {eff:>9.2f}")
+    print(f"{'model':<50} {'engine':<14} {'provider':<12} {'tier':<8} {'input':>7} {'output':>8} {'ratio':>6} {'effective':>10}")
+    print("-" * 119)
+    for _, model_id, engine, provider, tier_name, inp, out, ratio, eff in rows:
+        print(f"{model_id:<50} {engine:<14} {provider:<12} {tier_name:<8} {inp:>6.2f} {out:>7.2f} {ratio:>6.3f} {eff:>9.2f}")
     return 0
 
 
@@ -174,12 +179,15 @@ def main(argv: list[str] | None = None) -> int:
     model = args.model
     strategy = args.strategy
 
+    tier = Tier[args.tier] if args.tier else None
+
     if not engine and not model:
-        sel = select_model(config, engine=engine)
+        sel = select_model(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
         strategy = sel.strategy
-        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy})", file=sys.stderr)
+        tier_label = f" tier={sel.model.tier.name}" if tier else ""
+        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})", file=sys.stderr)
     elif not engine:
         matching = [s for s in get_catalog() if s.model_id == model]
         if not matching:
