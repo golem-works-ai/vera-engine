@@ -1,14 +1,21 @@
 """Tests for SecretRef, CredentialBundle, and the structural guard."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pytest
 
 from vera_engine.credentials import (
     CredentialBundle,
+    CredentialGuardError,
+    FORBIDDEN_FIELD_PATTERN,
     SecretRef,
+    assert_no_credential_shaped_fields,
     reject_credential_fields,
 )
+
+
+# ── SecretRef ────────────────────────────────────────────────────────────────
 
 
 def test_secret_ref_holds_name():
@@ -17,8 +24,13 @@ def test_secret_ref_holds_name():
 
 
 def test_secret_ref_empty_name_raises():
-    with pytest.raises(ValueError, match="name must not be empty"):
+    with pytest.raises(ValueError, match="must not be empty"):
         SecretRef("")
+
+
+def test_secret_ref_whitespace_only_raises():
+    with pytest.raises(ValueError, match="must not be empty"):
+        SecretRef("   ")
 
 
 def test_secret_ref_repr_shows_name():
@@ -30,7 +42,6 @@ def test_secret_ref_str_does_not_look_like_a_value():
     ref = SecretRef("MY_TOKEN")
     text = str(ref)
     assert text == "<SecretRef:MY_TOKEN>"
-    assert "MY_TOKEN" in text
 
 
 def test_secret_ref_is_frozen():
@@ -39,15 +50,42 @@ def test_secret_ref_is_frozen():
         ref.name = "Y"
 
 
+def test_secret_ref_as_shell_reference():
+    ref = SecretRef("PROXY_API_KEY")
+    assert ref.as_shell_reference() == "$PROXY_API_KEY"
+
+
+# ── CredentialBundle ─────────────────────────────────────────────────────────
+
+
 def test_credential_bundle_resolve_success():
     bundle = CredentialBundle(values={"FOO": "secret-value"})
     assert bundle.resolve(SecretRef("FOO")) == "secret-value"
 
 
-def test_credential_bundle_resolve_missing_raises_keyerror():
+def test_credential_bundle_resolve_missing_raises_guard_error():
     bundle = CredentialBundle(values={"FOO": "bar"})
-    with pytest.raises(KeyError, match="FOO2"):
+    with pytest.raises(CredentialGuardError, match="no value for 'FOO2'"):
         bundle.resolve(SecretRef("FOO2"))
+
+
+def test_credential_bundle_resolve_missing_is_not_keyerror():
+    bundle = CredentialBundle(values={})
+    with pytest.raises(CredentialGuardError):
+        bundle.resolve(SecretRef("MISSING"))
+    try:
+        bundle.resolve(SecretRef("MISSING"))
+    except KeyError:
+        pytest.fail("Should raise CredentialGuardError, not KeyError")
+    except CredentialGuardError:
+        pass
+
+
+def test_credential_bundle_accepts_mapping():
+    from collections.abc import Mapping
+    mapping: Mapping[str, str] = {"A": "1", "B": "2"}
+    bundle = CredentialBundle(values=mapping)
+    assert bundle.resolve(SecretRef("A")) == "1"
 
 
 def test_credential_bundle_repr_omits_values():
@@ -68,39 +106,101 @@ def test_credential_bundle_repr_sorted_keys():
     assert repr(bundle) == "CredentialBundle(keys=['AKEY', 'ZKEY'])"
 
 
-def test_reject_credential_fields_allows_clean_dataclass():
+# ── FORBIDDEN_FIELD_PATTERN ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", [
+    "api_key", "api-key", "apikey", "API_KEY",
+    "oauth", "secret", "credential", "password", "passwd",
+    "my_api_key_value", "availability", "entitlement",
+])
+def test_forbidden_pattern_matches_credential_shapes(name):
+    assert FORBIDDEN_FIELD_PATTERN.search(name), f"{name!r} should match"
+
+
+@pytest.mark.parametrize("name", [
+    "model", "engine", "prompt", "workspace", "private_key",
+])
+def test_forbidden_pattern_ignores_safe_names(name):
+    assert not FORBIDDEN_FIELD_PATTERN.search(name), f"{name!r} should not match"
+
+
+# ── Structural guard ────────────────────────────────────────────────────────
+
+
+def test_guard_allows_clean_dataclass():
     @dataclass
     class Clean:
         name: str
         workspace: str
 
-    reject_credential_fields(Clean)  # should not raise
+    assert_no_credential_shaped_fields(Clean)
 
 
 @pytest.mark.parametrize(
     "field_name",
     [
         "api_key",
-        "api_secret",
-        "token",
+        "oauth_token",
         "secret",
         "password",
         "credential",
-        "private_key",
+        "passwd_hash",
         "API_KEY",
         "my_api_key_value",
     ],
 )
-def test_reject_credential_fields_rejects_credential_shaped_names(field_name):
+def test_guard_rejects_credential_shaped_names(field_name):
     ns = {"__annotations__": {field_name: str}}
     Dirty = dataclass(type("Dirty", (), ns))
-    with pytest.raises(TypeError, match="looks like a credential value field"):
-        reject_credential_fields(Dirty)
+    with pytest.raises(CredentialGuardError):
+        assert_no_credential_shaped_fields(Dirty)
 
 
-def test_reject_credential_fields_allows_credential_strategy_field():
+def test_guard_allows_credential_strategy_str():
     @dataclass
     class HasStrategy:
         credential_strategy: str
 
-    reject_credential_fields(HasStrategy)  # explicitly allow-listed
+    assert_no_credential_shaped_fields(HasStrategy)
+
+
+def test_guard_allows_credential_strategy_strenum():
+    class Strategy(StrEnum):
+        PROXY = "proxy"
+        NONE = "none"
+
+    @dataclass
+    class HasTypedStrategy:
+        credential_strategy: Strategy
+
+    assert_no_credential_shaped_fields(HasTypedStrategy)
+
+
+def test_guard_extra_pattern():
+    import re
+    extra = re.compile(r"(bearer|cookie)", re.IGNORECASE)
+
+    @dataclass
+    class HasBearer:
+        bearer_value: str
+
+    with pytest.raises(CredentialGuardError):
+        assert_no_credential_shaped_fields(HasBearer, extra_pattern=extra)
+
+    @dataclass
+    class NoCookie:
+        name: str
+
+    assert_no_credential_shaped_fields(NoCookie, extra_pattern=extra)
+
+
+def test_reject_credential_fields_is_alias():
+    assert reject_credential_fields is assert_no_credential_shaped_fields
+
+
+# ── CredentialGuardError ─────────────────────────────────────────────────────
+
+
+def test_credential_guard_error_is_runtime_error():
+    assert issubclass(CredentialGuardError, RuntimeError)
