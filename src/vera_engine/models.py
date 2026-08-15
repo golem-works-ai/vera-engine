@@ -103,7 +103,7 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode",
               "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
     _ModelDef("openrouter/moonshotai/kimi-k3", "opencode",
-              "openrouter", "moonshotai/kimi-k3", 3.0, 15.0, Tier.stone),
+              "openrouter", "moonshotai/kimi-k3", 3.0, 15.0, Tier.bronze),
     _ModelDef("openrouter/moonshotai/kimi-k2.7-code", "opencode",
               "openrouter", "moonshotai/kimi-k2.7-code", 0.67, 3.40, Tier.clay),
     _ModelDef("openrouter/openai/gpt-5.6-sol", "opencode",
