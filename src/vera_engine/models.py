@@ -103,7 +103,7 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     _ModelDef("openrouter/anthropic/claude-haiku-4.5", "opencode",
               "openrouter", "anthropic/claude-haiku-4.5", 1.0, 5.0, Tier.clay),
     _ModelDef("openrouter/moonshotai/kimi-k3", "opencode",
-              "openrouter", "moonshotai/kimi-k3", 3.0, 15.0, Tier.stone),
+              "openrouter", "moonshotai/kimi-k3", 3.0, 15.0, Tier.bronze),
     _ModelDef("openrouter/moonshotai/kimi-k2.7-code", "opencode",
               "openrouter", "moonshotai/kimi-k2.7-code", 0.67, 3.40, Tier.clay),
     _ModelDef("openrouter/openai/gpt-5.6-sol", "opencode",
@@ -112,6 +112,16 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
               "openrouter", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone),
     _ModelDef("openrouter/openai/gpt-5.6-luna", "opencode",
               "openrouter", "openai/gpt-5.6-luna", 0.10, 0.60, Tier.clay),
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    _ModelDef("openrouter/x-ai/grok-4.6", "opencode",
+              "openrouter", "x-ai/grok-4.6", 2.0, 6.0, Tier.bronze),
+    _ModelDef("openrouter/moonshotai/kimi-k2.6", "opencode",
+              "openrouter", "moonshotai/kimi-k2.6", 0.5415, 2.28, Tier.clay),
+    _ModelDef("openrouter/google/gemini-3.7-flash", "opencode",
+              "openrouter", "google/gemini-3.7-flash", 0.375, 1.875, Tier.clay),
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    _ModelDef("openrouter/z-ai/glm-5.2", "opencode",
+              "openrouter", "z-ai/glm-5.2", 0.462, 1.452, Tier.stone),
 )
 
 
