@@ -7,7 +7,7 @@ import pytest
 from vera_engine.auto_select import select_model, _usable_providers, _LOW_PCT_THRESHOLD, _LOW_USD_THRESHOLD
 from vera_engine.capacity import ProviderCapacity
 from vera_engine.config import EngineConfig
-from vera_engine.models import Tier
+from vera_engine.models import Tier, get_catalog
 
 
 def _cap(provider, available=True, pct=None, usd=None, detail="", auth="api-key"):
@@ -170,12 +170,17 @@ def test_tier_stone_excludes_clay():
     assert sel.model.tier >= Tier.stone
 
 
-def test_tier_bronze_selects_opus():
+def test_tier_bronze_selects_cheapest_at_or_above_bronze():
     config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.tier >= Tier.bronze
-    assert "opus" in sel.model.model_id
+    # grok-4.6 (added 2026-08-15) is the cheapest bronze-tier model in the
+    # catalog; assert cost-minimality instead of a specific model_id so this
+    # test doesn't need updating every time a cheaper model is added.
+    bronze_or_above = [m for m in get_catalog() if m.tier >= Tier.bronze]
+    cheapest = min(bronze_or_above, key=lambda m: m.blended_cost())
+    assert sel.model.model_id == cheapest.model_id
 
 
 def test_tier_iron_selects_fable():
