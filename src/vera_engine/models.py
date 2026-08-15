@@ -119,6 +119,9 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
               "openrouter", "moonshotai/kimi-k2.6", 0.5415, 2.28, Tier.clay),
     _ModelDef("openrouter/google/gemini-3.7-flash", "opencode",
               "openrouter", "google/gemini-3.7-flash", 0.375, 1.875, Tier.clay),
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    _ModelDef("openrouter/z-ai/glm-5.2", "opencode",
+              "openrouter", "z-ai/glm-5.2", 0.462, 1.452, Tier.stone),
 )
 
 
