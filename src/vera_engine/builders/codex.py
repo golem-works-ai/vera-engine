@@ -30,6 +30,8 @@ class CodexBuilder(EngineBuilder):
         argv: list[str] = ["codex", "exec"]
         if model:
             argv.extend(["--model", model])
+        # codex exec reads effort from -c model_reasoning_effort, not from a --effort flag.
+        argv.extend(["-c", f"model_reasoning_effort={request.effort}"])
         argv.append(request.prompt)
 
         env: dict[str, str | SecretRef] = {}

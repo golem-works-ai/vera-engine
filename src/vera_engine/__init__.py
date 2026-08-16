@@ -1,6 +1,12 @@
 """vera-engine: Engine abstraction layer for AI coding agent CLIs."""
 
-from vera_engine.auto_select import Selection, qualifying_models, select_cheapest, select_model
+from vera_engine.auto_select import (
+    Selection,
+    qualifying_models,
+    resolve_request,
+    select_cheapest,
+    select_model,
+)
 from vera_engine.config import EngineConfig, load_config
 from vera_engine.request import AgentRunRequest
 from vera_engine.credentials import (
@@ -37,6 +43,7 @@ __all__ = [
     "load_config",
     "qualifying_models",
     "render_local",
+    "resolve_request",
     "select_cheapest",
     "select_model",
 ]
@@ -45,13 +52,19 @@ __all__ = [
 def build_and_run(
     request: AgentRunRequest,
     credentials: dict[str, str] | None = None,
+    *,
+    config: EngineConfig | None = None,
+    probe: bool = False,
+    engines: frozenset[str] | set[str] | None = None,
 ) -> RunResult:
     """Build an invocation from a request and run it locally.
 
     This is the main convenience entry point. For more control,
     use get_builder() and render_local() separately.
     """
-    builder = get_builder(request.engine)
-    invocation = builder.build_invocation(request, request.credential_strategy)
+    cfg = config if config is not None else load_config(request.workspace)
+    resolved = resolve_request(request, cfg, probe=probe, engines=engines)
+    builder = get_builder(resolved.engine)
+    invocation = builder.build_invocation(resolved, resolved.credential_strategy)
     bundle = CredentialBundle(values=credentials or {})
     return render_local(invocation, bundle)

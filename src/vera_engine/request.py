@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from vera_engine.credentials import reject_credential_fields
+from vera_engine.models import Tier
 
 _VALID_EFFORTS = frozenset({"low", "medium", "high"})
 _VALID_STRATEGIES = frozenset({"env-key", "proxy", "none"})
@@ -18,7 +19,7 @@ class AgentRunRequest:
     Callers build this; the engine layer resolves HOW.
     """
 
-    engine: str
+    engine: str | None
     prompt: str
     workspace: Path
     model: str | None = None
@@ -26,9 +27,12 @@ class AgentRunRequest:
     timeout_seconds: int = 2400
     extra_env: dict[str, str] = field(default_factory=dict)
     credential_strategy: str = "env-key"
+    tier: Tier | None = None
+    exclude: frozenset[str] = field(default_factory=frozenset)
+    pins: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
-        if not self.engine:
+        if self.engine is not None and self.engine == "":
             raise ValueError("engine must not be empty")
         if not self.prompt:
             raise ValueError("prompt must not be empty")
