@@ -2,6 +2,7 @@
 
 OpenRouter: REST API for credit balance.
 Anthropic (Claude Code): parse ``claude -p "/usage"`` output.
+xAI (Grok): parse ``grok models`` for a live grok.com login.
 OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
 """
 
@@ -61,11 +62,29 @@ def check_openrouter() -> ProviderCapacity:
         return ProviderCapacity("openrouter", available=bool(key), detail=f"check failed: {exc}")
 
 
+_SUBSCRIPTION_MIN_PCT = 5.0
+
+
+def _prefer_subscription(cap: ProviderCapacity) -> bool:
+    """True when a live subscription should beat an API key."""
+    if not cap.available or cap.auth_method != "oauth":
+        return False
+    if cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT:
+        return False
+    return True
+
+
+def _api_key_capacity(provider: str) -> ProviderCapacity:
+    return ProviderCapacity(provider, available=True, detail="API key set", auth_method="api-key")
+
+
 def check_anthropic() -> ProviderCapacity:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return _check_claude_code_subscription()
-    return ProviderCapacity("anthropic", available=True, detail="API key set", auth_method="api-key")
+    sub = _check_claude_code_subscription()
+    if _prefer_subscription(sub):
+        return sub
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return _api_key_capacity("anthropic")
+    return sub
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
@@ -281,9 +300,59 @@ def _parse_codex_status(output: str) -> ProviderCapacity | None:
     )
 
 
+def check_xai() -> ProviderCapacity:
+    sub = _check_grok_subscription()
+    if _prefer_subscription(sub):
+        return sub
+    if os.environ.get("XAI_API_KEY") and shutil.which("grok"):
+        return _api_key_capacity("xai")
+    return sub
+
+
+def _check_grok_subscription() -> ProviderCapacity:
+    """Parse ``grok models`` for a live grok.com login.
+
+    ``/usage`` is a TUI slash command. ``grok -p /usage`` starts an agent.
+    Remaining percent is not exposed headless. A live grok.com session
+    matches Claude's "subscription active, usage unknown".
+    """
+    if not shutil.which("grok"):
+        return ProviderCapacity("xai", available=False, detail="grok CLI not found")
+    try:
+        env = os.environ.copy()
+        env.pop("XAI_API_KEY", None)
+        result = subprocess.run(
+            ["grok", "models"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+        )
+        return _parse_grok_models(f"{result.stdout}\n{result.stderr}")
+    except FileNotFoundError:
+        return ProviderCapacity("xai", available=False, detail="grok CLI not found")
+    except subprocess.TimeoutExpired:
+        return ProviderCapacity("xai", available=False, detail="grok models check timed out")
+    except Exception as exc:
+        logger.warning("Grok models check failed: %s", exc)
+        return ProviderCapacity("xai", available=False, detail=f"check failed: {exc}")
+
+
+def _parse_grok_models(output: str) -> ProviderCapacity:
+    if "You are logged in with grok.com" in output:
+        return ProviderCapacity(
+            "xai",
+            available=True,
+            detail="subscription active, usage unknown",
+            auth_method="oauth",
+        )
+    return ProviderCapacity("xai", available=False, detail="not on subscription")
+
+
 def check_all() -> dict[str, ProviderCapacity]:
     return {
         "anthropic": check_anthropic(),
         "openrouter": check_openrouter(),
         "openai": check_openai(),
+        "xai": check_xai(),
     }

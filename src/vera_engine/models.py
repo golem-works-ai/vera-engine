@@ -52,6 +52,7 @@ PROVIDER_CREDENTIALS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "xai": "XAI_API_KEY",
 }
 
 
@@ -112,6 +113,9 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
               "openrouter", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone),
     _ModelDef("openrouter/openai/gpt-5.6-luna", "opencode",
               "openrouter", "openai/gpt-5.6-luna", 0.10, 0.60, Tier.clay),
+    # xAI direct via grok. Same list price as the OpenRouter row.
+    # Capacity picks oauth vs env-key. Do not add grok-4.5.
+    _ModelDef("grok-4.6", "grok", "xai", "x-ai/grok-4.6", 2.0, 6.0, Tier.bronze),
     # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
     _ModelDef("openrouter/x-ai/grok-4.6", "opencode",
               "openrouter", "x-ai/grok-4.6", 2.0, 6.0, Tier.bronze),

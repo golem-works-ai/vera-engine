@@ -9,9 +9,12 @@ from vera_engine.capacity import (
     ProviderCapacity,
     _parse_claude_usage,
     _parse_codex_status,
+    _parse_grok_models,
+    check_all,
     check_anthropic,
     check_openai,
     check_openrouter,
+    check_xai,
 )
 
 CLAUDE_USAGE_OUTPUT = """\
@@ -137,10 +140,35 @@ def test_check_openai_without_key_codex_unavailable():
     assert cap.available is False
 
 
-def test_check_anthropic_with_api_key():
+def test_check_anthropic_prefers_subscription_when_key_also_set():
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        cap = check_anthropic()
+        with patch("vera_engine.capacity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = CLAUDE_USAGE_OUTPUT
+            cap = check_anthropic()
     assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert cap.remaining_pct == 76.0
+    mock_run.assert_called()
+
+
+def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
+        with patch("vera_engine.capacity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = CLAUDE_USAGE_HIGH
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+    assert "API key" in cap.detail
+
+
+def test_check_anthropic_falls_through_to_api_key_when_cli_missing():
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
+        with patch("vera_engine.capacity.subprocess.run", side_effect=FileNotFoundError):
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
 
 
@@ -152,6 +180,7 @@ def test_check_anthropic_falls_back_to_claude_cli():
             cap = check_anthropic()
     assert cap.available is True
     assert cap.remaining_pct == 76.0
+    assert cap.auth_method == "oauth"
 
 
 def test_check_anthropic_no_key_no_cli():
@@ -160,3 +189,90 @@ def test_check_anthropic_no_key_no_cli():
             cap = check_anthropic()
     assert cap.available is False
     assert "not found" in cap.detail
+
+
+GROK_MODELS_LOGGED_IN = """\
+You are logged in with grok.com.
+
+Default model: grok-4.6
+
+Available models:
+  * grok-4.6 (default)
+  - grok-4.5
+"""
+
+GROK_MODELS_UNAUTH = """\
+You are not authenticated.
+
+Default model: grok-4.6
+"""
+
+
+def test_parse_grok_models_logged_in():
+    cap = _parse_grok_models(GROK_MODELS_LOGGED_IN)
+    assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert cap.remaining_pct is None
+    assert "usage unknown" in cap.detail
+
+
+def test_parse_grok_models_not_authenticated():
+    cap = _parse_grok_models(GROK_MODELS_UNAUTH)
+    assert cap.available is False
+    assert "not on subscription" in cap.detail
+
+
+def test_check_xai_prefers_subscription_when_key_also_set():
+    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
+        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"):
+            with patch("vera_engine.capacity.subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = GROK_MODELS_LOGGED_IN
+                mock_run.return_value.stderr = ""
+                cap = check_xai()
+    assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert cap.remaining_pct is None
+    called_env = mock_run.call_args.kwargs.get("env")
+    assert called_env is not None
+    assert "XAI_API_KEY" not in called_env
+    assert mock_run.call_args.args[0][:2] == ["grok", "models"]
+
+
+def test_check_xai_falls_through_to_api_key():
+    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
+        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"):
+            with patch("vera_engine.capacity.subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = GROK_MODELS_UNAUTH
+                mock_run.return_value.stderr = ""
+                cap = check_xai()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+    assert "API key" in cap.detail
+
+
+def test_check_xai_api_key_requires_cli():
+    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
+        with patch("vera_engine.capacity.shutil.which", return_value=None):
+            cap = check_xai()
+    assert cap.available is False
+    assert "not found" in cap.detail
+
+
+def test_check_xai_no_key_no_cli():
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("vera_engine.capacity.shutil.which", return_value=None):
+            cap = check_xai()
+    assert cap.available is False
+    assert "not found" in cap.detail
+
+
+def test_check_all_includes_xai():
+    fake = ProviderCapacity("xai", available=False, detail="stub")
+    with patch("vera_engine.capacity.check_anthropic", return_value=fake):
+        with patch("vera_engine.capacity.check_openrouter", return_value=fake):
+            with patch("vera_engine.capacity.check_openai", return_value=fake):
+                with patch("vera_engine.capacity.check_xai", return_value=fake):
+                    caps = check_all()
+    assert set(caps) == {"anthropic", "openrouter", "openai", "xai"}

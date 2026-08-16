@@ -11,7 +11,7 @@ from vera_engine.invocation import EngineInvocation
 class EngineBuilder(ABC):
     """Translates an AgentRunRequest into an EngineInvocation.
 
-    Each engine (claude-code, opencode, codex, etc.) implements one builder.
+    Each engine (claude-code, opencode, codex, grok, etc.) implements one builder.
     """
 
     @property

@@ -56,3 +56,23 @@ def test_all_catalog_costs_positive():
 def test_model_ids_unique():
     ids = [s.model_id for s in CATALOG]
     assert len(ids) == len(set(ids)), f"duplicate model IDs: {ids}"
+
+
+def test_catalog_has_direct_grok_46():
+    rows = [s for s in get_catalog() if s.model_id == "grok-4.6"]
+    assert len(rows) == 1
+    spec = rows[0]
+    assert spec.engine == "grok"
+    assert spec.provider == "xai"
+    assert spec.tier == Tier.bronze
+    assert spec.input_cost > 0
+    assert spec.output_cost > 0
+
+
+def test_catalog_has_no_grok_45():
+    ids = [s.model_id for s in get_catalog()]
+    assert not any("grok-4.5" in model_id for model_id in ids)
+
+
+def test_xai_provider_credential_is_xai_api_key():
+    assert PROVIDER_CREDENTIALS["xai"] == "XAI_API_KEY"

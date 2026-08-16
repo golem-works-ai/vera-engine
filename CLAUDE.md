@@ -1,6 +1,6 @@
 # vera-engine
 
-Engine abstraction layer for AI coding agent CLIs (claude-code, opencode, codex).
+Engine abstraction layer for AI coding agent CLIs (claude-code, opencode, codex, grok).
 
 ## Core Rules
 

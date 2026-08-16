@@ -24,6 +24,7 @@ _DEFAULT_RATIOS: dict[str, float] = {
     "anthropic": 1.0,
     "openrouter": 1.0,
     "openai": 1.0,
+    "xai": 1.0,
 }
 
 

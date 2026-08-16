@@ -6,6 +6,8 @@ import pytest
 
 from vera_engine.builders.claude_code import ClaudeCodeBuilder, DEFAULT_PROMPT_FILENAME
 from vera_engine.builders.codex import CodexBuilder
+from vera_engine.builders.grok import DEFAULT_PROMPT_FILENAME as GROK_PROMPT_FILENAME
+from vera_engine.builders.grok import GrokBuilder
 from vera_engine.builders.opencode import OpenCodeBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.request import AgentRunRequest
@@ -211,4 +213,74 @@ def test_codex_extra_env_merged_without_override(tmp_path):
     )
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
+    assert inv.env["OTHER"] == "val"
+
+
+# --- GrokBuilder ---
+
+
+def test_grok_supported_strategies():
+    builder = GrokBuilder()
+    assert builder.supported_strategies == frozenset({"env-key", "none"})
+
+
+def test_grok_default_model():
+    assert GrokBuilder().default_model() == "grok-4.6"
+
+
+def test_grok_env_key_strategy(tmp_path):
+    req = AgentRunRequest(engine="grok", prompt="do the thing", workspace=tmp_path)
+    inv = GrokBuilder().build_invocation(req, "env-key")
+
+    expected_prompt_path = tmp_path / GROK_PROMPT_FILENAME
+    assert inv.argv[0] == "grok"
+    assert "--prompt-file" in inv.argv
+    assert inv.argv[inv.argv.index("--prompt-file") + 1] == str(expected_prompt_path)
+    assert "--output-format" in inv.argv
+    assert inv.argv[inv.argv.index("--output-format") + 1] == "plain"
+    assert "--always-approve" in inv.argv
+    assert "-m" in inv.argv
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+    assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
+    assert inv.home_strategy == "hermetic"
+    assert inv.prompt_path == expected_prompt_path
+    assert len(inv.files) == 1
+    assert inv.files[0].content == "do the thing"
+
+
+def test_grok_none_strategy_uses_real_home(tmp_path):
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, credential_strategy="none"
+    )
+    inv = GrokBuilder().build_invocation(req, "none")
+    assert inv.home_strategy == "real"
+    secret_refs = [v for v in inv.env.values() if isinstance(v, SecretRef)]
+    assert len(secret_refs) == 0
+    assert "XAI_API_KEY" not in inv.env
+
+
+def test_grok_model_override(tmp_path):
+    req = AgentRunRequest(engine="grok", prompt="x", workspace=tmp_path, model="grok-4.6")
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert "-m" in inv.argv
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_grok_emits_reasoning_effort(tmp_path, effort):
+    req = AgentRunRequest(engine="grok", prompt="x", workspace=tmp_path, effort=effort)
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert "--reasoning-effort" in inv.argv
+    assert inv.argv[inv.argv.index("--reasoning-effort") + 1] == effort
+
+
+def test_grok_extra_env_merged_without_override(tmp_path):
+    req = AgentRunRequest(
+        engine="grok",
+        prompt="x",
+        workspace=tmp_path,
+        extra_env={"XAI_API_KEY": "should-not-win", "OTHER": "val"},
+    )
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
     assert inv.env["OTHER"] == "val"

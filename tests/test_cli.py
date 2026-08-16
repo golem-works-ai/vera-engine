@@ -137,6 +137,7 @@ def test_main_list_command(capsys):
     out = capsys.readouterr().out
     assert "claude-code" in out
     assert "codex" in out
+    assert "grok" in out
     assert "opencode" in out
 
 
