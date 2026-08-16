@@ -157,7 +157,7 @@ def test_codex_env_key_strategy(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="fix the bug", workspace=tmp_path)
     inv = CodexBuilder().build_invocation(req, "env-key")
 
-    assert inv.argv == ("codex", "exec", "fix the bug")
+    assert inv.argv == ("codex", "exec", "-c", "model_reasoning_effort=high", "fix the bug")
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
     assert inv.files == ()
     assert inv.prompt_path is None
@@ -189,6 +189,16 @@ def test_codex_prompt_is_last_argv_element(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="the actual prompt", workspace=tmp_path)
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert inv.argv[-1] == "the actual prompt"
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_codex_emits_effort_flag(tmp_path, effort):
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, effort=effort
+    )
+    inv = CodexBuilder().build_invocation(req, "env-key")
+    assert "-c" in inv.argv
+    assert inv.argv[inv.argv.index("-c") + 1] == f"model_reasoning_effort={effort}"
 
 
 def test_codex_extra_env_merged_without_override(tmp_path):

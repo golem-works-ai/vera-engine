@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from vera_engine.models import Tier
 from vera_engine.request import AgentRunRequest
 
 
@@ -66,6 +67,26 @@ def test_invalid_strategy_raises(tmp_path):
 def test_empty_engine_raises(tmp_path):
     with pytest.raises(ValueError, match="engine must not be empty"):
         AgentRunRequest(engine="", prompt="x", workspace=tmp_path)
+
+
+def test_none_engine_is_allowed(tmp_path):
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path)
+    assert req.engine is None
+    assert req.tier is None
+
+
+def test_tier_and_filters_store(tmp_path):
+    req = AgentRunRequest(
+        engine=None,
+        prompt="x",
+        workspace=tmp_path,
+        tier=Tier.clay,
+        exclude=frozenset({"m1"}),
+        pins=frozenset({"m2"}),
+    )
+    assert req.tier is Tier.clay
+    assert req.exclude == frozenset({"m1"})
+    assert req.pins == frozenset({"m2"})
 
 
 def test_empty_prompt_raises(tmp_path):

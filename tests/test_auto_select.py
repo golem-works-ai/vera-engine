@@ -4,17 +4,22 @@ from unittest.mock import patch
 
 import pytest
 
+from vera_engine import build_and_run
 from vera_engine.auto_select import (
     _LOW_PCT_THRESHOLD,
     _LOW_USD_THRESHOLD,
     _usable_providers,
     qualifying_models,
+    resolve_request,
     select_cheapest,
     select_model,
 )
 from vera_engine.capacity import ProviderCapacity
 from vera_engine.config import EngineConfig
+from vera_engine.invocation import RunResult
 from vera_engine.models import ModelSpec, Tier, get_catalog
+from vera_engine.request import AgentRunRequest
+from vera_engine.selection import list_engines
 
 
 def _cap(provider, available=True, pct=None, usd=None, detail="", auth="api-key"):
@@ -373,3 +378,84 @@ def test_qualifying_models_default_catalog_is_get_catalog(monkeypatch):
     monkeypatch.setattr("vera_engine.auto_select.get_catalog", lambda: (snap,))
     rows = qualifying_models(config)
     assert rows == [snap]
+
+
+# ── resolve_request ──────────────────────────────────────────────────────────
+
+
+def test_resolve_request_fills_engine_and_model_from_tier(tmp_path):
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay)
+    resolved = resolve_request(req, _uniform_config(), probe=False)
+    assert resolved.engine
+    assert resolved.model
+    matching = [spec for spec in get_catalog() if spec.model_id == resolved.model]
+    assert matching
+    assert matching[0].tier >= Tier.clay
+    assert matching[0].engine == resolved.engine
+
+
+def test_resolve_request_honors_pinned_engine(tmp_path):
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, tier=Tier.clay)
+    resolved = resolve_request(req, _uniform_config(), probe=False)
+    assert resolved.engine == "codex"
+    assert resolved.model
+
+
+def test_resolve_request_leaves_explicit_pair(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "vera_engine.auto_select.select_cheapest",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("select_cheapest")),
+    )
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, model="gpt-5")
+    resolved = resolve_request(req, EngineConfig(provider_ratios={}), probe=False)
+    assert resolved.engine == "codex"
+    assert resolved.model == "gpt-5"
+
+
+def test_resolve_request_unknown_model_without_engine_raises(tmp_path):
+    req = AgentRunRequest(
+        engine=None, prompt="x", workspace=tmp_path, model="not-a-real-id"
+    )
+    with pytest.raises(ValueError, match="unknown model"):
+        resolve_request(req, EngineConfig(provider_ratios={}))
+
+
+def test_resolve_request_probe_false_does_not_call_check_all(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "vera_engine.auto_select.check_all",
+        lambda: (_ for _ in ()).throw(AssertionError("probed")),
+    )
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay)
+    resolved = resolve_request(req, _uniform_config(), probe=False)
+    assert resolved.engine
+    assert resolved.model
+
+
+def test_build_and_run_resolves_missing_engine(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_render_local(invocation, bundle):
+        captured["invocation"] = invocation
+        return RunResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
+        )
+
+    monkeypatch.setattr("vera_engine.render_local", fake_render_local)
+    result = build_and_run(
+        AgentRunRequest(
+            engine=None,
+            prompt="hi",
+            workspace=tmp_path,
+            tier=Tier.clay,
+            credential_strategy="none",
+        )
+    )
+    assert "invocation" in captured
+    assert captured["invocation"].engine
+    assert captured["invocation"].engine in list_engines()
+    assert result.engine == captured["invocation"].engine

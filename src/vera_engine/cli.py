@@ -211,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         effort=args.effort,
         timeout_seconds=args.timeout,
         credential_strategy=strategy,
+        tier=tier,
     )
 
     builder = get_builder(request.engine)

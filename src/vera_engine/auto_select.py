@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from vera_engine.capacity import ProviderCapacity, check_all
 from vera_engine.config import EngineConfig
 from vera_engine.models import ModelSpec, Tier, get_catalog
+from vera_engine.request import AgentRunRequest
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,43 @@ def select_cheapest(
     spec = rows[0]
     cost = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
     return Selection(model=spec, strategy="env-key", effective_cost=cost)
+
+
+def resolve_request(
+    request: AgentRunRequest,
+    config: EngineConfig,
+    *,
+    probe: bool = False,
+    engines: frozenset[str] | set[str] | None = None,
+    provider: str | None = None,
+) -> AgentRunRequest:
+    """Fill engine and model. ``probe=True`` uses ``select_model``."""
+    if request.model is not None and request.engine is not None:
+        return request
+    if request.model is not None and request.engine is None:
+        matching = [spec for spec in get_catalog() if spec.model_id == request.model]
+        if not matching:
+            raise ValueError(f"unknown model {request.model!r}")
+        return replace(request, engine=matching[0].engine)
+    if probe:
+        sel = select_model(
+            config,
+            engine=request.engine,
+            tier=request.tier,
+            exclude=request.exclude,
+            provider=provider,
+        )
+    else:
+        sel = select_cheapest(
+            config,
+            engine=request.engine,
+            engines=engines,
+            provider=provider,
+            tier=request.tier,
+            exclude=request.exclude,
+            pins=request.pins,
+        )
+    return replace(request, engine=sel.model.engine, model=sel.model.model_id)
 
 
 def select_model(
