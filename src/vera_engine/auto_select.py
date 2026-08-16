@@ -22,6 +22,81 @@ class Selection:
     effective_cost: float
 
 
+def qualifying_models(
+    config: EngineConfig,
+    *,
+    engine: str | None = None,
+    engines: frozenset[str] | set[str] | None = None,
+    provider: str | None = None,
+    tier: Tier | None = None,
+    exclude: frozenset[str] | set[str] | None = None,
+    pins: frozenset[str] | set[str] | None = None,
+    catalog: tuple[ModelSpec, ...] | None = None,
+) -> list[ModelSpec]:
+    """Catalog rows that meet the filters, cheapest first. No capacity probe.
+
+    Pass ``catalog`` as the import-time ``CATALOG`` so two dispatches in one
+    process cannot disagree because a price moved. Default ``None`` keeps ``get_catalog()``.
+    """
+    if engine is not None and engines is not None and engine not in engines:
+        raise ValueError(f"engine {engine!r} is not in engines allowlist {sorted(engines)}")
+
+    excluded = exclude or set()
+    rows = catalog if catalog is not None else get_catalog()
+    candidates: list[tuple[float, str, ModelSpec]] = []
+
+    for spec in rows:
+        if spec.model_id in excluded:
+            continue
+        if pins is not None and spec.model_id not in pins:
+            continue
+        if engine is not None and spec.engine != engine:
+            continue
+        if engines is not None and spec.engine not in engines:
+            continue
+        if provider is not None and spec.provider != provider:
+            continue
+        if tier is not None and spec.tier < tier:
+            continue
+        effective = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
+        candidates.append((effective, spec.model_id, spec))
+
+    candidates.sort()
+    return [spec for _, _, spec in candidates]
+
+
+def select_cheapest(
+    config: EngineConfig,
+    *,
+    engine: str | None = None,
+    engines: frozenset[str] | set[str] | None = None,
+    provider: str | None = None,
+    tier: Tier | None = None,
+    exclude: frozenset[str] | set[str] | None = None,
+    pins: frozenset[str] | set[str] | None = None,
+    catalog: tuple[ModelSpec, ...] | None = None,
+) -> Selection:
+    """Cheapest qualifier at or above ``tier``. No capacity probe.
+
+    Async dispatch uses this. ``select_model`` probes live capacity and must stay local-only.
+    """
+    rows = qualifying_models(
+        config,
+        engine=engine,
+        engines=engines,
+        provider=provider,
+        tier=tier,
+        exclude=exclude,
+        pins=pins,
+        catalog=catalog,
+    )
+    if not rows:
+        raise ValueError("no usable model found")
+    spec = rows[0]
+    cost = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
+    return Selection(model=spec, strategy="env-key", effective_cost=cost)
+
+
 def select_model(
     config: EngineConfig,
     *,
@@ -45,29 +120,20 @@ def select_model(
     """
     capacities = check_all()
     usable = _usable_providers(capacities)
-    excluded = exclude or set()
-    candidates: list[tuple[float, str, ModelSpec]] = []
-
-    for spec in get_catalog():
-        if spec.model_id in excluded:
-            continue
-        if engine and spec.engine != engine:
-            continue
-        if provider and spec.provider != provider:
-            continue
-        if tier is not None and spec.tier < tier:
-            continue
-        if spec.provider not in usable:
-            continue
-        effective = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
-        candidates.append((effective, spec.model_id, spec))
+    candidates = [
+        spec
+        for spec in qualifying_models(
+            config, engine=engine, provider=provider, tier=tier, exclude=exclude
+        )
+        if spec.provider in usable
+    ]
 
     if not candidates:
         detail = {p: c.detail for p, c in capacities.items()}
         raise ValueError(f"no usable model found (capacity: {detail})")
 
-    candidates.sort()
-    cost, _, spec = candidates[0]
+    spec = candidates[0]
+    cost = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
     cap = capacities.get(spec.provider)
     if cap and cap.remaining_pct is not None and cap.remaining_pct < 20:
         logger.warning(

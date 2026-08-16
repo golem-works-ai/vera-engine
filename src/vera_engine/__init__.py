@@ -1,6 +1,6 @@
 """vera-engine: Engine abstraction layer for AI coding agent CLIs."""
 
-from vera_engine.auto_select import Selection, select_model
+from vera_engine.auto_select import Selection, qualifying_models, select_cheapest, select_model
 from vera_engine.config import EngineConfig, load_config
 from vera_engine.request import AgentRunRequest
 from vera_engine.credentials import (
@@ -35,7 +35,9 @@ __all__ = [
     "get_builder",
     "list_engines",
     "load_config",
+    "qualifying_models",
     "render_local",
+    "select_cheapest",
     "select_model",
 ]
 
