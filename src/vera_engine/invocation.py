@@ -16,7 +16,19 @@ class MaterializedFile:
 
     relative_path: str
     content: str
+    mode: int = 0o644
+    expand_references: bool = False
     cleanup: bool = True  # Remove after the engine exits.
+
+    def __post_init__(self) -> None:
+        if Path(self.relative_path).is_absolute():
+            raise ValueError(
+                f"relative_path must be workspace-relative, got {self.relative_path!r}"
+            )
+        if ".." in Path(self.relative_path).parts:
+            raise ValueError(
+                f"relative_path must not contain '..', got {self.relative_path!r}"
+            )
 
 
 @dataclass(frozen=True)

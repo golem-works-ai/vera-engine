@@ -12,7 +12,19 @@ def test_materialized_file_defaults():
     mf = MaterializedFile(relative_path="prompt.md", content="hi")
     assert mf.relative_path == "prompt.md"
     assert mf.content == "hi"
+    assert mf.mode == 0o644
+    assert mf.expand_references is False
     assert mf.cleanup is True
+
+
+def test_materialized_file_rejects_absolute_path():
+    with pytest.raises(ValueError):
+        MaterializedFile(relative_path="/tmp/x", content="hi")
+
+
+def test_materialized_file_rejects_parent_segment():
+    with pytest.raises(ValueError):
+        MaterializedFile(relative_path="../secret", content="hi")
 
 
 def test_materialized_file_cleanup_false():

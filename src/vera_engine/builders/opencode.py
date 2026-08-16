@@ -43,10 +43,12 @@ class OpenCodeBuilder(EngineBuilder):
         if strategy == "proxy":
             import json
             config = {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
+            # Stored body holds $ANTHROPIC_BASE_URL; default is False so literal $ in prompts stay intact.
             files.append(
                 MaterializedFile(
                     relative_path="opencode.json",
                     content=json.dumps(config, indent=2),
+                    expand_references=True,
                     cleanup=True,
                 )
             )
