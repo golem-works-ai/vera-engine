@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from vera_engine.auto_select import select_model
+from vera_engine.auto_select import select_cheapest, select_model
 from vera_engine.capacity import check_all
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
@@ -181,12 +181,20 @@ def main(argv: list[str] | None = None) -> int:
 
     tier = Tier[args.tier] if args.tier else None
 
-    if not engine and not model:
+    if not model and engine is None:
         sel = select_model(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
         strategy = sel.strategy
         tier_label = f" tier={sel.model.tier.name}" if tier else ""
+        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})", file=sys.stderr)
+    elif not model and tier is not None:
+        # A pinned --engine still participates in cheapest-at-tier when --model is omitted.
+        # The old `if not engine and not model` skip spawned Codex default gpt-5.6-terra.
+        sel = select_cheapest(config, engine=engine, tier=tier)
+        engine = sel.model.engine
+        model = sel.model.model_id
+        tier_label = f" tier={sel.model.tier.name}"
         print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})", file=sys.stderr)
     elif not engine:
         matching = [s for s in get_catalog() if s.model_id == model]

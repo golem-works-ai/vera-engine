@@ -4,10 +4,17 @@ from unittest.mock import patch
 
 import pytest
 
-from vera_engine.auto_select import select_model, _usable_providers, _LOW_PCT_THRESHOLD, _LOW_USD_THRESHOLD
+from vera_engine.auto_select import (
+    _LOW_PCT_THRESHOLD,
+    _LOW_USD_THRESHOLD,
+    _usable_providers,
+    qualifying_models,
+    select_cheapest,
+    select_model,
+)
 from vera_engine.capacity import ProviderCapacity
 from vera_engine.config import EngineConfig
-from vera_engine.models import Tier, get_catalog
+from vera_engine.models import ModelSpec, Tier, get_catalog
 
 
 def _cap(provider, available=True, pct=None, usd=None, detail="", auth="api-key"):
@@ -235,3 +242,134 @@ def test_exclude_empty_set_is_noop():
         without = select_model(config)
         with_empty = select_model(config, exclude=set())
     assert without.model.model_id == with_empty.model.model_id
+
+
+# ── no-probe cheapest-at-tier ───────────────────────────────────────────────
+
+
+def _uniform_config() -> EngineConfig:
+    return EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+
+
+def _rank_key(config: EngineConfig, spec: ModelSpec) -> tuple[float, str]:
+    return (
+        spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight),
+        spec.model_id,
+    )
+
+
+def test_select_cheapest_picks_lowest_effective_cost():
+    config = _uniform_config()
+    winner = min(get_catalog(), key=lambda spec: _rank_key(config, spec))
+    sel = select_cheapest(config, tier=None)
+    assert sel.model.model_id == winner.model_id
+    assert sel.strategy == "env-key"
+    assert sel.effective_cost == pytest.approx(_rank_key(config, winner)[0])
+
+
+def test_select_cheapest_tier_clay_includes_higher_tiers():
+    config = _uniform_config()
+    rows = qualifying_models(config, tier=Tier.clay)
+    assert rows
+    assert all(spec.tier >= Tier.clay for spec in rows)
+    sel = select_cheapest(config, tier=Tier.clay)
+    assert sel.model.tier >= Tier.clay
+
+
+def test_select_cheapest_tier_iron_excludes_below():
+    config = _uniform_config()
+    rows = qualifying_models(config, tier=Tier.iron)
+    assert rows
+    assert all(spec.tier >= Tier.iron for spec in rows)
+    sel = select_cheapest(config, tier=Tier.iron)
+    assert sel.model.tier >= Tier.iron
+
+
+def test_select_cheapest_engine_filter():
+    config = EngineConfig(provider_ratios={})
+    rows = qualifying_models(config, engine="codex")
+    assert rows
+    assert all(spec.engine == "codex" for spec in rows)
+    sel = select_cheapest(config, engine="codex")
+    assert sel.model.engine == "codex"
+
+
+def test_select_cheapest_engines_allowlist():
+    config = EngineConfig(provider_ratios={})
+    rows = qualifying_models(config, engines={"claude-code", "opencode"})
+    assert rows
+    assert all(spec.engine != "codex" for spec in rows)
+    sel = select_cheapest(config, engines={"claude-code", "opencode"})
+    assert sel.model.engine != "codex"
+
+
+def test_select_cheapest_engine_not_in_allowlist_raises():
+    config = EngineConfig(provider_ratios={})
+    with pytest.raises(ValueError):
+        select_cheapest(config, engine="codex", engines={"opencode"})
+
+
+def test_select_cheapest_exclude_moves_to_next():
+    config = _uniform_config()
+    first = select_cheapest(config)
+    second = select_cheapest(config, exclude={first.model.model_id})
+    ranked = qualifying_models(config)
+    assert first.model.model_id == ranked[0].model_id
+    assert second.model.model_id == ranked[1].model_id
+
+
+def test_select_cheapest_pins_whitelist():
+    config = EngineConfig(provider_ratios={})
+    ranked = qualifying_models(config)
+    some_id = ranked[-1].model_id
+    sel = select_cheapest(config, pins={some_id})
+    assert sel.model.model_id == some_id
+
+
+def test_select_cheapest_empty_pins_raises():
+    config = EngineConfig(provider_ratios={})
+    with pytest.raises(ValueError, match="no usable model found"):
+        select_cheapest(config, pins=frozenset())
+
+
+def test_select_cheapest_does_not_call_check_all(monkeypatch):
+    monkeypatch.setattr(
+        "vera_engine.auto_select.check_all",
+        lambda: (_ for _ in ()).throw(AssertionError("probed")),
+    )
+    config = _uniform_config()
+    sel = select_cheapest(config)
+    assert sel.model.model_id
+
+
+def test_qualifying_models_uses_supplied_catalog(monkeypatch):
+    config = EngineConfig(provider_ratios={})
+    snap = ModelSpec(
+        model_id="only-snap",
+        engine="codex",
+        provider="openai",
+        input_cost=1.0,
+        output_cost=1.0,
+        tier=Tier.clay,
+    )
+    monkeypatch.setattr(
+        "vera_engine.auto_select.get_catalog",
+        lambda: (_ for _ in ()).throw(AssertionError("live catalog")),
+    )
+    rows = qualifying_models(config, catalog=(snap,))
+    assert rows == [snap]
+
+
+def test_qualifying_models_default_catalog_is_get_catalog(monkeypatch):
+    config = EngineConfig(provider_ratios={})
+    snap = ModelSpec(
+        model_id="only-live",
+        engine="codex",
+        provider="openai",
+        input_cost=1.0,
+        output_cost=1.0,
+        tier=Tier.clay,
+    )
+    monkeypatch.setattr("vera_engine.auto_select.get_catalog", lambda: (snap,))
+    rows = qualifying_models(config)
+    assert rows == [snap]

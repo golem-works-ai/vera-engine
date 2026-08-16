@@ -1,13 +1,15 @@
 """Tests for the CLI: argument parsing and main()."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vera_engine.auto_select import Selection
 from vera_engine.cli import _build_parser, _collect_credentials, main
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, RunResult
+from vera_engine.models import ModelSpec, Tier
 
 
 # --- argument parsing ---
@@ -278,3 +280,103 @@ def test_main_run_none_strategy_needs_no_credentials(tmp_path, monkeypatch):
         )
 
     assert rc == 0
+
+
+def _clay_codex_selection() -> Selection:
+    spec = ModelSpec(
+        model_id="gpt-5.6-luna",
+        engine="codex",
+        provider="openai",
+        input_cost=1.0,
+        output_cost=1.0,
+        tier=Tier.clay,
+    )
+    return Selection(model=spec, strategy="env-key", effective_cost=1.0)
+
+
+def test_main_engine_plus_tier_without_model_selects(tmp_path, monkeypatch):
+    sel = _clay_codex_selection()
+    fake_select = MagicMock(return_value=sel)
+    captured = {}
+
+    def fake_render_local(invocation, bundle):
+        captured["invocation"] = invocation
+        return RunResult(
+            returncode=0, stdout="ok", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    with (
+        patch("vera_engine.cli.select_cheapest", fake_select),
+        patch("vera_engine.cli.render_local", fake_render_local),
+    ):
+        rc = main(
+            [
+                "run",
+                "--engine",
+                "codex",
+                "--tier",
+                "clay",
+                "--prompt",
+                "hi",
+                "--workspace",
+                str(tmp_path),
+                "--strategy",
+                "none",
+            ]
+        )
+
+    assert rc == 0
+    fake_select.assert_called_once()
+    kwargs = fake_select.call_args.kwargs
+    assert kwargs["engine"] == "codex"
+    assert kwargs["tier"] == Tier.clay
+    argv = captured["invocation"].argv
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-luna"
+    assert "OPENAI_API_KEY" not in captured["invocation"].env
+
+
+def test_main_engine_without_model_or_tier_skips_select(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    fake_cheapest = MagicMock()
+    fake_model = MagicMock()
+
+    def fake_render_local(invocation, bundle):
+        return RunResult(
+            returncode=0, stdout="", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    with (
+        patch("vera_engine.cli.select_cheapest", fake_cheapest),
+        patch("vera_engine.cli.select_model", fake_model),
+        patch("vera_engine.cli.render_local", fake_render_local),
+    ):
+        rc = main(
+            ["run", "--engine", "codex", "--prompt", "hi", "--workspace", str(tmp_path)]
+        )
+
+    assert rc == 0
+    fake_cheapest.assert_not_called()
+    fake_model.assert_not_called()
+
+
+def test_main_omitted_engine_and_model_still_probes(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    fake_select = MagicMock(return_value=_clay_codex_selection())
+
+    def fake_render_local(invocation, bundle):
+        return RunResult(
+            returncode=0, stdout="", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    with (
+        patch("vera_engine.cli.select_model", fake_select),
+        patch("vera_engine.cli.render_local", fake_render_local),
+    ):
+        rc = main(["run", "--prompt", "hi", "--workspace", str(tmp_path)])
+
+    assert rc == 0
+    fake_select.assert_called_once()
