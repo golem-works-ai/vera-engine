@@ -143,7 +143,13 @@ def test_materialize_files_writes_content(tmp_path):
 
 
 def test_materialize_files_expands_vars_in_content(tmp_path):
-    files = (MaterializedFile(relative_path="cfg.json", content='{"url": "$BASE_URL"}'),)
+    files = (
+        MaterializedFile(
+            relative_path="cfg.json",
+            content='{"url": "$BASE_URL"}',
+            expand_references=True,
+        ),
+    )
     _materialize_files(files, tmp_path, {"BASE_URL": "https://example.com"})
     assert (tmp_path / "cfg.json").read_text() == '{"url": "https://example.com"}'
 
@@ -162,9 +168,27 @@ def test_materialize_files_no_cleanup_excluded_from_returned_paths(tmp_path):
 
 
 def test_materialize_files_unresolved_var_raises(tmp_path):
-    files = (MaterializedFile(relative_path="bad.txt", content="$UNSET"),)
+    files = (
+        MaterializedFile(
+            relative_path="bad.txt",
+            content="$UNSET",
+            expand_references=True,
+        ),
+    )
     with pytest.raises(ValueError, match="unresolved reference"):
         _materialize_files(files, tmp_path, {})
+
+
+def test_materialize_files_literal_dollar_when_expansion_off(tmp_path):
+    files = (MaterializedFile(relative_path="note.txt", content="cost is $PRICE"),)
+    _materialize_files(files, tmp_path, {})
+    assert (tmp_path / "note.txt").read_text() == "cost is $PRICE"
+
+
+def test_materialize_files_applies_mode(tmp_path):
+    files = (MaterializedFile(relative_path="script.sh", content="#!/bin/sh", mode=0o755),)
+    _materialize_files(files, tmp_path, {})
+    assert (tmp_path / "script.sh").stat().st_mode & 0o777 == 0o755
 
 
 # --- _cleanup_files ---

@@ -119,6 +119,7 @@ def test_opencode_proxy_strategy_adds_config_file(tmp_path):
     config_file = inv.files[0]
     config = json.loads(config_file.content)
     assert config == {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
+    assert config_file.expand_references is True
 
 
 def test_opencode_unsupported_strategy_raises(tmp_path):

@@ -86,8 +86,9 @@ def _materialize_files(
     for mf in files:
         target = workdir / mf.relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        content = _expand_vars(mf.content, env)
+        content = _expand_vars(mf.content, env) if mf.expand_references else mf.content
         target.write_text(content, encoding="utf-8")
+        target.chmod(mf.mode)
         if mf.cleanup:
             paths.append(target)
     return paths
