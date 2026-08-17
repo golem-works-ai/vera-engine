@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_DEFAULT_INPUT_WEIGHT = 0.5
+_DEFAULT_INPUT_WEIGHT = 0.8
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class EngineConfig:
 
 _DEFAULT_RATIOS: dict[str, float] = {
     "anthropic": 1.0,
-    "openrouter": 1.0,
+    "openrouter": 1.01375,
     "openai": 1.0,
     "xai": 1.0,
 }
@@ -40,7 +40,7 @@ def load_config(workspace: Path | None = None) -> EngineConfig:
     """Load config from the first .vera-engine.toml found.
 
     Search order: workspace dir, then home dir. If neither exists,
-    return defaults (all ratios 1.0).
+    return defaults (input_weight 0.8, openrouter 1.01375, others 1.0).
     """
     for path in _config_paths(workspace):
         if path.is_file():

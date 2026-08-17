@@ -2,6 +2,7 @@
 # Place at ~/.vera-engine.toml or .vera-engine.toml in your workspace.
 
 # Fraction of tokens that are input in a typical coding agent run.
+# Code default is 0.8. This file uses the measured Vera staging value.
 # Measured from Vera staging: 0.956 across 172k proxy requests.
 # Higher values weight input cost more heavily in model selection.
 input_weight = 0.95

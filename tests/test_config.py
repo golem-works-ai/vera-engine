@@ -8,14 +8,14 @@ import pytest
 from vera_engine.config import EngineConfig, load_config, _parse_config
 
 
-def test_default_config_all_ratios_one(tmp_path, monkeypatch):
+def test_default_config_without_toml(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     config = load_config(workspace=Path("/nonexistent"))
     assert config.cost_ratio("anthropic") == 1.0
-    assert config.cost_ratio("openrouter") == 1.0
+    assert config.cost_ratio("openrouter") == pytest.approx(1.01375)
     assert config.cost_ratio("openai") == 1.0
     assert config.cost_ratio("xai") == 1.0
-    assert config.input_weight == 0.5
+    assert config.input_weight == 0.8
 
 
 def test_unknown_provider_returns_one():
@@ -49,6 +49,8 @@ def test_load_config_workspace_file(tmp_path):
     """))
     config = load_config(workspace=tmp_path)
     assert config.cost_ratio("anthropic") == pytest.approx(0.5)
+    assert config.cost_ratio("openrouter") == pytest.approx(1.01375)
+    assert config.input_weight == 0.8
 
 
 def test_parse_config_rejects_negative_ratio(tmp_path):
