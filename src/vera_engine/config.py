@@ -6,6 +6,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Conservative coding-agent mix so OpenRouter Grok is not ~$4 from the old 0.5 weight.
+# 0.95 belongs in example-config as a measured override.
 _DEFAULT_INPUT_WEIGHT = 0.8
 
 

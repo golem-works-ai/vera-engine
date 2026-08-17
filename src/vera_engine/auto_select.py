@@ -56,6 +56,7 @@ def qualifying_models(
             continue
         if pins is not None and spec.model_id not in pins:
             continue
+        # Subscription-vs-API discipline. Anthropic does not want Max routed through third parties.
         if pins is None and _is_opencode_anthropic(spec):
             continue
         if engine is not None and spec.engine != engine:
