@@ -2,6 +2,8 @@
 
 OpenRouter: REST API for credit balance.
 Anthropic (Claude Code): parse ``claude -p "/usage"`` output.
+xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
+``grok models`` is the fallback when tmux or ``/usage`` cannot produce a percent.
 OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
 """
 
@@ -61,11 +63,29 @@ def check_openrouter() -> ProviderCapacity:
         return ProviderCapacity("openrouter", available=bool(key), detail=f"check failed: {exc}")
 
 
+_SUBSCRIPTION_MIN_PCT = 5.0
+
+
+def _prefer_subscription(cap: ProviderCapacity) -> bool:
+    """True when a live subscription should beat an API key."""
+    if not cap.available or cap.auth_method != "oauth":
+        return False
+    if cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT:
+        return False
+    return True
+
+
+def _api_key_capacity(provider: str) -> ProviderCapacity:
+    return ProviderCapacity(provider, available=True, detail="API key set", auth_method="api-key")
+
+
 def check_anthropic() -> ProviderCapacity:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return _check_claude_code_subscription()
-    return ProviderCapacity("anthropic", available=True, detail="API key set", auth_method="api-key")
+    sub = _check_claude_code_subscription()
+    if _prefer_subscription(sub):
+        return sub
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return _api_key_capacity("anthropic")
+    return sub
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
@@ -281,9 +301,193 @@ def _parse_codex_status(output: str) -> ProviderCapacity | None:
     )
 
 
+def check_xai() -> ProviderCapacity:
+    sub = _check_grok_subscription()
+    if _prefer_subscription(sub):
+        return sub
+    if os.environ.get("XAI_API_KEY") and shutil.which("grok"):
+        return _api_key_capacity("xai")
+    return sub
+
+
+_GROK_TMUX_SESSION = "vera-engine-grok-usage"
+_GROK_POLL_INTERVAL = 0.5
+_GROK_STARTUP_TIMEOUT = 15.0
+_GROK_USAGE_TIMEOUT = 10.0
+# TUI bar is creditUsagePercent (used), not remaining. Same conversion as Claude.
+_GROK_WEEKLY_BAR_RE = re.compile(
+    r"Weekly limit\s*\(([^)]+)\)(?:[^\n]*\n){1,3}[^\n]*?(\d+)\s*%",
+)
+_GROK_USD_RE = re.compile(
+    r"\$(\d+(?:\.\d+)?)\s*/\s*\$(\d+(?:\.\d+)?)",
+)
+
+
+def _check_grok_subscription() -> ProviderCapacity:
+    """Probe grok.com remaining capacity.
+
+    Primary: tmux TUI ``/usage``. ``grok -p /usage`` starts an agent.
+    Fallback: ``grok models`` login line, remaining percent unknown.
+    """
+    usage = _check_grok_usage()
+    if usage is not None:
+        return usage
+    return _check_grok_models()
+
+
+def _check_grok_usage() -> ProviderCapacity | None:
+    """Launch grok in tmux, send /usage, parse the weekly-limit bar."""
+    if not shutil.which("grok"):
+        return None
+    if not shutil.which("tmux"):
+        logger.debug("tmux not available for grok usage check")
+        return None
+
+    _tmux_kill(_GROK_TMUX_SESSION)
+    try:
+        env = os.environ.copy()
+        env.pop("XAI_API_KEY", None)
+        r = subprocess.run(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                _GROK_TMUX_SESSION,
+                "-x",
+                "120",
+                "-y",
+                "40",
+                "--",
+                "env",
+                "-u",
+                "XAI_API_KEY",
+                "grok",
+            ],
+            capture_output=True,
+            timeout=5,
+            env=env,
+        )
+        if r.returncode != 0:
+            return None
+
+        deadline = time.monotonic() + _GROK_STARTUP_TIMEOUT
+        ready = False
+        while time.monotonic() < deadline:
+            time.sleep(_GROK_POLL_INTERVAL)
+            buf = _tmux_capture(_GROK_TMUX_SESSION)
+            if "Do you trust" in buf:
+                _tmux_send(_GROK_TMUX_SESSION, "Enter")
+                continue
+            if "Grok Build" in buf or "❯" in buf or "always-approve" in buf:
+                ready = True
+                break
+
+        if not ready:
+            logger.debug("grok TUI did not reach ready state")
+            return None
+
+        time.sleep(0.5)
+        _tmux_send_literal(_GROK_TMUX_SESSION, "/usage")
+        time.sleep(0.2)
+        _tmux_send(_GROK_TMUX_SESSION, "Enter")
+
+        dismiss_count = 0
+        deadline = time.monotonic() + _GROK_USAGE_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(_GROK_POLL_INTERVAL)
+            buf = _tmux_capture(_GROK_TMUX_SESSION)
+            parsed = _parse_grok_usage(buf)
+            if parsed is not None:
+                return parsed
+            if "/usage" in buf and dismiss_count < 3:
+                _tmux_send(_GROK_TMUX_SESSION, "Enter")
+                dismiss_count += 1
+
+        logger.debug("grok /usage did not render in time")
+        return None
+    except Exception as exc:
+        logger.warning("grok usage check failed: %s", exc)
+        return None
+    finally:
+        _tmux_kill(_GROK_TMUX_SESSION)
+
+
+def _parse_grok_usage(output: str) -> ProviderCapacity | None:
+    """Extract weekly remaining from grok TUI ``/usage``.
+
+    Returns None if the weekly-limit line has not rendered yet.
+    """
+    if "You are not authenticated" in output:
+        return ProviderCapacity("xai", available=False, detail="not on subscription")
+
+    bar = _GROK_WEEKLY_BAR_RE.search(output)
+    usd = _GROK_USD_RE.search(output)
+    if bar is None and usd is None:
+        return None
+
+    plan = bar.group(1).strip() if bar else "unknown"
+    remaining_pct = float(100 - int(bar.group(2))) if bar is not None else None
+    remaining_usd = float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+
+    if remaining_pct is not None:
+        available = remaining_pct > 2
+        detail = f"grok {plan}: {remaining_pct:.0f}% weekly remaining"
+    elif remaining_usd is not None:
+        available = remaining_usd > 0
+        detail = f"grok {plan}: ${remaining_usd:.2f} remaining"
+    else:
+        return None
+
+    return ProviderCapacity(
+        "xai",
+        available=available,
+        remaining_pct=remaining_pct,
+        remaining_usd=remaining_usd,
+        detail=detail,
+        auth_method="oauth",
+    )
+
+
+def _check_grok_models() -> ProviderCapacity:
+    """Parse ``grok models`` for a live grok.com login."""
+    if not shutil.which("grok"):
+        return ProviderCapacity("xai", available=False, detail="grok CLI not found")
+    try:
+        env = os.environ.copy()
+        env.pop("XAI_API_KEY", None)
+        result = subprocess.run(
+            ["grok", "models"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+        )
+        return _parse_grok_models(f"{result.stdout}\n{result.stderr}")
+    except FileNotFoundError:
+        return ProviderCapacity("xai", available=False, detail="grok CLI not found")
+    except subprocess.TimeoutExpired:
+        return ProviderCapacity("xai", available=False, detail="grok models check timed out")
+    except Exception as exc:
+        logger.warning("Grok models check failed: %s", exc)
+        return ProviderCapacity("xai", available=False, detail=f"check failed: {exc}")
+
+
+def _parse_grok_models(output: str) -> ProviderCapacity:
+    if "You are logged in with grok.com" in output:
+        return ProviderCapacity(
+            "xai",
+            available=True,
+            detail="subscription active, usage unknown",
+            auth_method="oauth",
+        )
+    return ProviderCapacity("xai", available=False, detail="not on subscription")
+
+
 def check_all() -> dict[str, ProviderCapacity]:
     return {
         "anthropic": check_anthropic(),
         "openrouter": check_openrouter(),
         "openai": check_openai(),
+        "xai": check_xai(),
     }

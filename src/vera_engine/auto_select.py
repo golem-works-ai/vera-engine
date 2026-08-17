@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 _LOW_PCT_THRESHOLD = 5.0
 _LOW_USD_THRESHOLD = 1.0
+_OAUTH_DEFAULT_RATIO = 0.2
+
+
+def _is_opencode_anthropic(spec: ModelSpec) -> bool:
+    return spec.engine == "opencode" and spec.model_id.startswith("openrouter/anthropic/")
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,8 @@ def qualifying_models(
         if spec.model_id in excluded:
             continue
         if pins is not None and spec.model_id not in pins:
+            continue
+        if pins is None and _is_opencode_anthropic(spec):
             continue
         if engine is not None and spec.engine != engine:
             continue
@@ -170,8 +177,9 @@ def select_model(
         detail = {p: c.detail for p, c in capacities.items()}
         raise ValueError(f"no usable model found (capacity: {detail})")
 
+    candidates.sort(key=lambda spec: (_selection_cost(spec, config, capacities), spec.model_id))
     spec = candidates[0]
-    cost = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
+    cost = _selection_cost(spec, config, capacities)
     cap = capacities.get(spec.provider)
     if cap and cap.remaining_pct is not None and cap.remaining_pct < 20:
         logger.warning(
@@ -181,6 +189,23 @@ def select_model(
         )
     strategy = _infer_strategy(spec, capacities)
     return Selection(model=spec, strategy=strategy, effective_cost=cost)
+
+
+def _selection_cost(
+    spec: ModelSpec,
+    config: EngineConfig,
+    capacities: dict[str, ProviderCapacity],
+) -> float:
+    """Effective cost for probe-time ranking.
+
+    OAuth prepaid with no toml discount (ratio 1.0) uses 0.2 so it does
+    not tie list-price OpenRouter and lose.
+    """
+    ratio = config.cost_ratio(spec.provider)
+    cap = capacities.get(spec.provider)
+    if cap is not None and cap.auth_method == "oauth" and ratio == 1.0:
+        ratio = _OAUTH_DEFAULT_RATIO
+    return spec.effective_cost(ratio, config.input_weight)
 
 
 def _infer_strategy(spec: ModelSpec, capacities: dict[str, ProviderCapacity]) -> str:

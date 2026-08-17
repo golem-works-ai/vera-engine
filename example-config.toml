@@ -17,3 +17,7 @@ cost_ratio = 1.01375
 
 [providers.openai]
 cost_ratio = 1.0
+
+[providers.xai]
+# Pre-paid grok.com subscription: (subscription cost / expected value).
+cost_ratio = 0.2

@@ -14,6 +14,7 @@ def test_default_config_all_ratios_one(tmp_path, monkeypatch):
     assert config.cost_ratio("anthropic") == 1.0
     assert config.cost_ratio("openrouter") == 1.0
     assert config.cost_ratio("openai") == 1.0
+    assert config.cost_ratio("xai") == 1.0
     assert config.input_weight == 0.5
 
 

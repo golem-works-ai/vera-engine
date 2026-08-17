@@ -31,6 +31,7 @@ def _all_healthy():
         "anthropic": _cap("anthropic", pct=80.0, auth="oauth"),
         "openrouter": _cap("openrouter", usd=500.0),
         "openai": _cap("openai"),
+        "xai": _cap("xai", auth="oauth"),
     }
 
 
@@ -39,6 +40,7 @@ def _only_anthropic_oauth():
         "anthropic": _cap("anthropic", pct=80.0, auth="oauth"),
         "openrouter": _cap("openrouter", available=False),
         "openai": _cap("openai", available=False),
+        "xai": _cap("xai", available=False),
     }
 
 
@@ -47,6 +49,7 @@ def _only_anthropic_api_key():
         "anthropic": _cap("anthropic", auth="api-key"),
         "openrouter": _cap("openrouter", available=False),
         "openai": _cap("openai", available=False),
+        "xai": _cap("xai", available=False),
     }
 
 
@@ -55,6 +58,25 @@ def _only_openrouter():
         "anthropic": _cap("anthropic", available=False),
         "openrouter": _cap("openrouter", usd=500.0),
         "openai": _cap("openai", available=False),
+        "xai": _cap("xai", available=False),
+    }
+
+
+def _only_xai_oauth():
+    return {
+        "anthropic": _cap("anthropic", available=False),
+        "openrouter": _cap("openrouter", available=False),
+        "openai": _cap("openai", available=False),
+        "xai": _cap("xai", auth="oauth"),
+    }
+
+
+def _only_xai_api_key():
+    return {
+        "anthropic": _cap("anthropic", available=False),
+        "openrouter": _cap("openrouter", available=False),
+        "openai": _cap("openai", available=False),
+        "xai": _cap("xai", auth="api-key"),
     }
 
 
@@ -63,6 +85,7 @@ def _none_available():
         "anthropic": _cap("anthropic", available=False),
         "openrouter": _cap("openrouter", available=False),
         "openai": _cap("openai", available=False),
+        "xai": _cap("xai", available=False),
     }
 
 
@@ -71,7 +94,12 @@ def _openrouter_low():
         "anthropic": _cap("anthropic", pct=80.0, auth="oauth"),
         "openrouter": _cap("openrouter", usd=0.50),
         "openai": _cap("openai"),
+        "xai": _cap("xai", auth="oauth"),
     }
+
+
+def _is_opencode_anthropic(spec: ModelSpec) -> bool:
+    return spec.engine == "opencode" and spec.model_id.startswith("openrouter/anthropic/")
 
 
 def test_selects_cheapest_with_all_healthy():
@@ -183,16 +211,79 @@ def test_tier_stone_excludes_clay():
 
 
 def test_tier_bronze_selects_cheapest_at_or_above_bronze():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 1.0}
+    )
+    caps = _all_healthy()
+    with patch("vera_engine.auto_select.check_all", return_value=caps):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.tier >= Tier.bronze
-    # grok-4.6 (added 2026-08-15) is the cheapest bronze-tier model in the
-    # catalog; assert cost-minimality instead of a specific model_id so this
-    # test doesn't need updating every time a cheaper model is added.
-    bronze_or_above = [m for m in get_catalog() if m.tier >= Tier.bronze]
-    cheapest = min(bronze_or_above, key=lambda m: m.blended_cost())
-    assert sel.model.model_id == cheapest.model_id
+    usable = _usable_providers(caps)
+    ranked = [
+        spec
+        for spec in qualifying_models(config, tier=Tier.bronze)
+        if spec.provider in usable
+    ]
+    assert ranked
+    assert sel.model.model_id == ranked[0].model_id
+
+
+def test_tier_bronze_never_selects_opencode_anthropic():
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 1.0}
+    )
+    with patch("vera_engine.auto_select.check_all", return_value=_only_openrouter()):
+        probed = select_model(config, tier=Tier.bronze)
+    cheapest = select_cheapest(config, tier=Tier.bronze)
+    assert not _is_opencode_anthropic(probed.model)
+    assert not _is_opencode_anthropic(cheapest.model)
+    rows = qualifying_models(config, engine="opencode", tier=Tier.bronze)
+    assert rows
+    assert all(not _is_opencode_anthropic(spec) for spec in rows)
+
+
+def test_xai_subscription_selects_grok_none():
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 0.2}
+    )
+    with patch("vera_engine.auto_select.check_all", return_value=_only_xai_oauth()):
+        sel = select_model(config, tier=Tier.bronze)
+    assert sel.model.engine == "grok"
+    assert sel.model.model_id == "grok-4.6"
+    assert sel.model.provider == "xai"
+    assert sel.strategy == "none"
+
+
+def test_xai_api_key_selects_grok_env_key():
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 1.0}
+    )
+    with patch("vera_engine.auto_select.check_all", return_value=_only_xai_api_key()):
+        sel = select_model(config, tier=Tier.bronze)
+    assert sel.model.engine == "grok"
+    assert sel.model.model_id == "grok-4.6"
+    assert sel.strategy == "env-key"
+
+
+def test_xai_unavailable_falls_back_to_openrouter_grok():
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 1.0}
+    )
+    with patch("vera_engine.auto_select.check_all", return_value=_only_openrouter()):
+        sel = select_model(config, tier=Tier.bronze)
+    assert sel.model.model_id == "openrouter/x-ai/grok-4.6"
+    assert sel.model.engine == "opencode"
+    assert sel.strategy == "env-key"
+
+
+def test_xai_oauth_without_toml_is_cheaper_than_list():
+    config = EngineConfig(provider_ratios={})
+    with patch("vera_engine.auto_select.check_all", return_value=_only_xai_oauth()):
+        sel = select_model(config, tier=Tier.bronze)
+    assert sel.model.provider == "xai"
+    assert sel.strategy == "none"
+    list_cost = sel.model.blended_cost(config.input_weight)
+    assert sel.effective_cost == pytest.approx(list_cost * 0.2)
 
 
 def test_tier_iron_selects_fable():
@@ -253,7 +344,9 @@ def test_exclude_empty_set_is_noop():
 
 
 def _uniform_config() -> EngineConfig:
-    return EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    return EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0, "xai": 1.0}
+    )
 
 
 def _rank_key(config: EngineConfig, spec: ModelSpec) -> tuple[float, str]:

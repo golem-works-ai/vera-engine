@@ -5,6 +5,7 @@ from __future__ import annotations
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.builders.claude_code import ClaudeCodeBuilder
 from vera_engine.builders.codex import CodexBuilder
+from vera_engine.builders.grok import GrokBuilder
 from vera_engine.builders.opencode import OpenCodeBuilder
 
 # Registry: engine name -> builder instance.
@@ -22,6 +23,7 @@ def _register(builder: EngineBuilder) -> None:
 _register(ClaudeCodeBuilder())
 _register(OpenCodeBuilder())
 _register(CodexBuilder())
+_register(GrokBuilder())
 
 
 def get_builder(engine: str) -> EngineBuilder:
