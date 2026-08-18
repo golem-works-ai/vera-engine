@@ -1,6 +1,7 @@
 """Tests for provider capacity checks."""
 
 import os
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -41,6 +42,17 @@ def test_parse_claude_usage_normal():
     assert cap.remaining_pct == 76.0
     assert "session 96%" in cap.detail
     assert "week 76%" in cap.detail
+
+
+def test_claude_usage_reports_weekly_token_time_and_pressure():
+    cap = _parse_claude_usage(
+        CLAUDE_USAGE_OUTPUT,
+        now=datetime(2026, 8, 16, 6, 0, tzinfo=UTC),
+    )
+    assert cap.token_used_pct == 24.0
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(85.7, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.282, abs=0.001)
 
 
 def test_parse_claude_usage_nearly_exhausted():
@@ -96,6 +108,18 @@ def test_parse_codex_status_normal():
     assert cap.remaining_pct == 99.0
     assert "Plus" in cap.detail
     assert cap.auth_method == "oauth"
+
+
+def test_codex_status_reports_token_time_and_pressure():
+    cap = _parse_codex_status(
+        CODEX_STATUS_OUTPUT,
+        now=datetime(2026, 8, 14, 14, 31, tzinfo=UTC),
+    )
+    assert cap is not None
+    assert cap.token_used_pct == 1.0
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.0182, abs=0.001)
 
 
 def test_parse_codex_status_low():
@@ -266,6 +290,18 @@ def test_parse_grok_usage_healthy():
     assert "47%" in cap.detail
 
 
+def test_grok_usage_reports_token_time_and_pressure():
+    cap = _parse_grok_usage(
+        GROK_USAGE_OUTPUT,
+        now=datetime(2026, 8, 19, 13, 51, tzinfo=UTC),
+    )
+    assert cap is not None
+    assert cap.token_used_pct == 53.0
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.964, abs=0.001)
+
+
 def test_parse_grok_usage_nearly_exhausted():
     cap = _parse_grok_usage(GROK_USAGE_LOW)
     assert cap is not None
@@ -397,7 +433,8 @@ def test_check_grok_usage_strips_api_key_and_uses_dedicated_session():
     assert "XAI_API_KEY" not in env
 
 
-def test_check_all_includes_xai():
+def test_check_all_includes_xai(tmp_path, monkeypatch):
+    monkeypatch.setattr("vera_engine.capacity._CAPACITY_CACHE_PATH", tmp_path / "capacity.json")
     fake = ProviderCapacity("xai", available=False, detail="stub")
     with patch("vera_engine.capacity.check_anthropic", return_value=fake):
         with patch("vera_engine.capacity.check_openrouter", return_value=fake):
@@ -405,3 +442,20 @@ def test_check_all_includes_xai():
                 with patch("vera_engine.capacity.check_xai", return_value=fake):
                     caps = check_all()
     assert set(caps) == {"anthropic", "openrouter", "openai", "xai"}
+
+
+def test_check_all_reuses_fresh_disk_cache(tmp_path, monkeypatch):
+    cache_path = tmp_path / "capacity.json"
+    monkeypatch.setattr("vera_engine.capacity._CAPACITY_CACHE_PATH", cache_path)
+    fake = ProviderCapacity("xai", available=True, detail="cached")
+
+    with (
+        patch("vera_engine.capacity.check_anthropic", return_value=fake) as anthropic,
+        patch("vera_engine.capacity.check_openrouter", return_value=fake),
+        patch("vera_engine.capacity.check_openai", return_value=fake),
+        patch("vera_engine.capacity.check_xai", return_value=fake),
+    ):
+        assert check_all(force=True)["anthropic"] == fake
+        assert check_all()["anthropic"] == fake
+
+    anthropic.assert_called_once()

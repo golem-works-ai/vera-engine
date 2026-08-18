@@ -9,16 +9,17 @@ input_weight = 0.95
 
 [providers.anthropic]
 # Pre-paid subscription: (subscription cost / expected value).
-# Claude Code Max 20x: $200/mo with ~$1000/mo expected value = 0.2
-cost_ratio = 0.2
+# Claude Code Max 20x: $200/mo with ~$2000/mo expected value = 0.1
+cost_ratio = 0.1
 
 [providers.openrouter]
 # Retail markup + taxes.
 cost_ratio = 1.01375
 
 [providers.openai]
-cost_ratio = 1.0
+# A detected Codex OAuth subscription uses 0.1 unless overridden here.
+cost_ratio = 0.1
 
 [providers.xai]
 # Pre-paid grok.com subscription: (subscription cost / expected value).
-cost_ratio = 0.2
+cost_ratio = 0.1

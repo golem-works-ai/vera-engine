@@ -11,6 +11,8 @@ from vera_engine.auto_select import (
     _usable_providers,
     qualifying_models,
     resolve_request,
+    selection_cost,
+    selection_cost_ratio,
     select_cheapest,
     select_model,
 )
@@ -104,11 +106,15 @@ def _is_opencode_anthropic(spec: ModelSpec) -> bool:
 
 def test_selects_cheapest_with_all_healthy():
     config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+    capacities = _all_healthy()
+    with patch("vera_engine.auto_select.check_all", return_value=capacities):
         sel = select_model(config)
-    from vera_engine.models import get_catalog
-    cheapest = min(s.blended_cost(config.input_weight) for s in get_catalog())
-    assert sel.model.blended_cost(config.input_weight) == pytest.approx(cheapest)
+    cheapest = min(
+        selection_cost(spec, config, capacities)
+        for spec in qualifying_models(config)
+        if spec.provider in _usable_providers(capacities)
+    )
+    assert sel.effective_cost == pytest.approx(cheapest)
 
 
 def test_subscription_ratio_changes_winner():
@@ -283,7 +289,25 @@ def test_xai_oauth_without_toml_is_cheaper_than_list():
     assert sel.model.provider == "xai"
     assert sel.strategy == "none"
     list_cost = sel.model.blended_cost(config.input_weight)
-    assert sel.effective_cost == pytest.approx(list_cost * 0.2)
+    assert sel.effective_cost == pytest.approx(list_cost * 0.1)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai", "xai"])
+def test_oauth_subscription_uses_default_subscription_ratio(provider):
+    spec = ModelSpec("test", "test-engine", provider, 2.0, 6.0, Tier.clay)
+    capacities = {provider: _cap(provider, auth="oauth")}
+    config = EngineConfig(provider_ratios={})
+
+    assert selection_cost_ratio(spec, config, capacities) == pytest.approx(0.1)
+    assert selection_cost(spec, config, capacities) == pytest.approx(0.28)
+
+
+def test_explicit_provider_ratio_overrides_oauth_subscription_default():
+    spec = ModelSpec("test", "test-engine", "openai", 2.0, 6.0, Tier.clay)
+    capacities = {"openai": _cap("openai", auth="oauth")}
+    config = EngineConfig(provider_ratios={"openai": 0.25})
+
+    assert selection_cost_ratio(spec, config, capacities) == pytest.approx(0.25)
 
 
 def test_tier_iron_selects_fable():
@@ -296,11 +320,15 @@ def test_tier_iron_selects_fable():
 
 def test_tier_none_includes_all():
     config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+    capacities = _all_healthy()
+    with patch("vera_engine.auto_select.check_all", return_value=capacities):
         sel = select_model(config, tier=None)
-    from vera_engine.models import get_catalog
-    cheapest = min(s.blended_cost(config.input_weight) for s in get_catalog())
-    assert sel.model.blended_cost(config.input_weight) == pytest.approx(cheapest)
+    cheapest = min(
+        selection_cost(spec, config, capacities)
+        for spec in qualifying_models(config)
+        if spec.provider in _usable_providers(capacities)
+    )
+    assert sel.effective_cost == pytest.approx(cheapest)
 
 
 # ── exclude (model blacklist) ───────────────────────────────────────────────

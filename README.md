@@ -34,6 +34,17 @@ request = AgentRunRequest(
 result = build_and_run(request, credentials={"ANTHROPIC_API_KEY": "..."})
 ```
 
+### Model costs
+
+`python -m vera_engine models` shows the same effective costs used by
+capacity-aware model selection. It checks local Claude Code, Codex, and Grok
+OAuth sessions. A detected subscription uses a `0.1` cost ratio unless
+`.vera-engine.toml` sets a provider-specific ratio.
+
+`python -m vera_engine capacity` caches its snapshot locally for 30 minutes.
+It reports quota use, elapsed-window use, and a usage-pressure score. Run
+`python -m vera_engine capacity --refresh` to query the providers immediately.
+
 ## Adding an Engine
 
 Create a new file in `src/vera_engine/builders/` implementing `EngineBuilder`. Register it in `src/vera_engine/selection.py`. That's it.

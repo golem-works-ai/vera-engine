@@ -7,7 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from vera_engine.auto_select import select_cheapest, select_model
+from vera_engine.auto_select import (
+    select_cheapest,
+    select_model,
+    selection_cost,
+    selection_cost_ratio,
+)
 from vera_engine.capacity import check_all
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
@@ -78,7 +83,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("models", help="List models with effective costs")
 
     # "capacity" subcommand
-    sub.add_parser("capacity", help="Check remaining capacity per provider")
+    capacity_parser = sub.add_parser("capacity", help="Check remaining capacity per provider")
+    capacity_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Bypass the 30-minute local capacity cache",
+    )
 
     return parser
 
@@ -114,12 +124,25 @@ def _collect_credentials(invocation: "EngineInvocation") -> CredentialBundle:
 
 def _cmd_models(workspace: Path) -> int:
     config = load_config(workspace)
+    capacities = check_all()
     w = config.input_weight
     rows: list[tuple[float, str, str, str, str, float, float, float, float]] = []
     for spec in get_catalog():
-        ratio = config.cost_ratio(spec.provider)
-        effective = spec.effective_cost(ratio, w)
-        rows.append((effective, spec.model_id, spec.engine, spec.provider, spec.tier.name, spec.input_cost, spec.output_cost, ratio, effective))
+        ratio = selection_cost_ratio(spec, config, capacities)
+        effective = selection_cost(spec, config, capacities)
+        rows.append(
+            (
+                effective,
+                spec.model_id,
+                spec.engine,
+                spec.provider,
+                spec.tier.name,
+                spec.input_cost,
+                spec.output_cost,
+                ratio,
+                effective,
+            )
+        )
     rows.sort()
 
     print(f"input_weight: {w}")
@@ -130,13 +153,23 @@ def _cmd_models(workspace: Path) -> int:
     return 0
 
 
-def _cmd_capacity() -> int:
-    capacities = check_all()
+def _cmd_capacity(*, refresh: bool = False) -> int:
+    capacities = check_all(force=refresh)
+    print(
+        f"{'provider':<14} {'status':<14} {'remaining':>9} {'tokens':>8} "
+        f"{'window':>8} {'pressure':>9}  detail"
+    )
     for provider, cap in capacities.items():
         status = "ok" if cap.available else "unavailable"
-        pct = f"{cap.remaining_pct:.0f}%" if cap.remaining_pct is not None else "-"
-        usd = f"${cap.remaining_usd:.2f}" if cap.remaining_usd is not None else "-"
-        print(f"{provider:<14} {status:<14} {pct:>6}  {usd:>10}  {cap.detail}")
+        remaining = f"{cap.remaining_pct:.0f}%" if cap.remaining_pct is not None else "-"
+        tokens = f"{cap.token_used_pct:.0f}%" if cap.token_used_pct is not None else "-"
+        window = f"{cap.window_used_pct:.0f}%" if cap.window_used_pct is not None else "-"
+        pressure = f"{cap.usage_pressure:.2f}" if cap.usage_pressure is not None else "-"
+        label = f" {cap.window_name}" if cap.window_name is not None else ""
+        print(
+            f"{provider:<14} {status:<14} {remaining:>9} {tokens:>8} "
+            f"{window:>8} {pressure:>9}  {cap.detail}{label}"
+        )
     return 0
 
 
@@ -154,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_models(workspace)
 
     if args.command == "capacity":
-        return _cmd_capacity()
+        return _cmd_capacity(refresh=args.refresh)
 
     if args.command != "run":
         parser.print_help()

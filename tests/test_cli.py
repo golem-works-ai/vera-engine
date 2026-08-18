@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vera_engine.auto_select import Selection
-from vera_engine.cli import _build_parser, _collect_credentials, main
+from vera_engine.capacity import ProviderCapacity
+from vera_engine.cli import _build_parser, _cmd_capacity, _cmd_models, _collect_credentials, main
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, RunResult
 from vera_engine.models import ModelSpec, Tier
@@ -139,6 +140,53 @@ def test_main_list_command(capsys):
     assert "codex" in out
     assert "grok" in out
     assert "opencode" in out
+
+
+def test_models_uses_subscription_aware_selection_cost(tmp_path, capsys):
+    spec = ModelSpec(
+        model_id="gpt-test",
+        engine="codex",
+        provider="openai",
+        input_cost=2.0,
+        output_cost=6.0,
+        tier=Tier.clay,
+    )
+    capacities = {"openai": MagicMock(auth_method="oauth")}
+
+    with (
+        patch("vera_engine.cli.check_all", return_value=capacities),
+        patch("vera_engine.cli.get_catalog", return_value=(spec,)),
+    ):
+        assert _cmd_models(tmp_path) == 0
+
+    output = capsys.readouterr().out
+    assert " 0.100" in output
+    assert "     0.28" in output
+
+
+def test_capacity_shows_token_time_and_pressure(capsys):
+    capacity = ProviderCapacity(
+        "openai",
+        available=True,
+        remaining_pct=47.0,
+        detail="codex Plus",
+        auth_method="oauth",
+        token_used_pct=53.0,
+        window_used_pct=40.0,
+        window_name="week",
+    )
+    with patch("vera_engine.cli.check_all", return_value={"openai": capacity}) as check_all:
+        assert _cmd_capacity() == 0
+
+    check_all.assert_called_once_with(force=False)
+
+    output = capsys.readouterr().out
+    assert "tokens" in output
+    assert "window" in output
+    assert "pressure" in output
+    assert "53%" in output
+    assert "40%" in output
+    assert "1.00" in output
 
 
 def test_main_no_command_prints_help():

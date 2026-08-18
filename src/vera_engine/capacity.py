@@ -18,10 +18,14 @@ import subprocess
 import time
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+_CAPACITY_CACHE_TTL_SECONDS = 30 * 60
+_CAPACITY_CACHE_PATH = Path.home() / ".cache" / "vera-engine" / "capacity.json"
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,18 @@ class ProviderCapacity:
     remaining_usd: float | None = None
     detail: str = ""
     auth_method: str = "api-key"
+    token_used_pct: float | None = None
+    window_used_pct: float | None = None
+    window_name: str | None = None
+
+    @property
+    def usage_pressure(self) -> float | None:
+        """Return quota-use pressure relative to elapsed subscription time."""
+        if self.token_used_pct is None or self.window_used_pct is None:
+            return None
+        token_used = self.token_used_pct / 100
+        time_used = self.window_used_pct / 100
+        return token_used / (time_used * 0.7 + 0.25)
 
 
 def check_openrouter() -> ProviderCapacity:
@@ -111,17 +127,49 @@ def _check_claude_code_subscription() -> ProviderCapacity:
 
 _SESSION_PCT_RE = re.compile(r"Current session:\s*(\d+)%\s*used")
 _WEEK_PCT_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used")
+_CLAUDE_SESSION_RESET_RE = re.compile(
+    r"Current session:.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
+)
+_CLAUDE_WEEK_RESET_RE = re.compile(
+    r"Current week \(all models\):.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
+)
 
 
-def _parse_claude_usage(output: str) -> ProviderCapacity:
+def _window_used_pct(reset_at: datetime, duration: timedelta, now: datetime) -> float:
+    """Return elapsed-window percentage, bounded to the active window."""
+    start_at = reset_at - duration
+    elapsed = (now - start_at).total_seconds() / duration.total_seconds()
+    return max(0.0, min(100.0, elapsed * 100))
+
+
+def _parse_reset(
+    value: str, fmt: str, *, now: datetime, duration: timedelta
+) -> float | None:
+    """Parse a provider reset timestamp and return its elapsed-window percentage."""
+    value = re.sub(r"(?<!:)\b(\d{1,2})([ap]m)\b", r"\1:00\2", value)
+    try:
+        reset_at = datetime.strptime(value, fmt).replace(year=now.year, tzinfo=UTC)
+    except ValueError:
+        return None
+    if reset_at < now - duration:
+        reset_at = reset_at.replace(year=reset_at.year + 1)
+    return _window_used_pct(reset_at, duration, now)
+
+
+def _parse_claude_usage(
+    output: str, *, now: datetime | None = None
+) -> ProviderCapacity:
     if "subscription" not in output.lower():
         return ProviderCapacity("anthropic", available=False, detail="not on subscription")
 
     session_match = _SESSION_PCT_RE.search(output)
     week_match = _WEEK_PCT_RE.search(output)
 
-    session_remaining = 100 - int(session_match.group(1)) if session_match else None
-    week_remaining = 100 - int(week_match.group(1)) if week_match else None
+    current_time = now or datetime.now(UTC)
+    session_used = float(session_match.group(1)) if session_match else None
+    week_used = float(week_match.group(1)) if week_match else None
+    session_remaining = 100 - session_used if session_used is not None else None
+    week_remaining = 100 - week_used if week_used is not None else None
 
     if session_remaining is not None and week_remaining is not None:
         remaining = min(session_remaining, week_remaining)
@@ -134,9 +182,24 @@ def _parse_claude_usage(output: str) -> ProviderCapacity:
 
     parts = []
     if session_remaining is not None:
-        parts.append(f"session {session_remaining}%")
+        parts.append(f"session {session_remaining:.0f}%")
     if week_remaining is not None:
-        parts.append(f"week {week_remaining}%")
+        parts.append(f"week {week_remaining:.0f}%")
+
+    limiting_window = max(
+        (
+            (session_used, "session", _CLAUDE_SESSION_RESET_RE, timedelta(hours=5)),
+            (week_used, "week", _CLAUDE_WEEK_RESET_RE, timedelta(days=7)),
+        ),
+        key=lambda value: value[0] if value[0] is not None else -1,
+    )
+    token_used, window_name, reset_re, duration = limiting_window
+    reset_match = reset_re.search(output)
+    window_used = (
+        _parse_reset(reset_match.group(1), "%b %d, %I:%M%p", now=current_time, duration=duration)
+        if reset_match is not None
+        else None
+    )
 
     return ProviderCapacity(
         "anthropic",
@@ -144,6 +207,9 @@ def _parse_claude_usage(output: str) -> ProviderCapacity:
         remaining_pct=float(remaining),
         detail=f"{', '.join(parts)} remaining",
         auth_method="oauth",
+        token_used_pct=token_used,
+        window_used_pct=window_used,
+        window_name=window_name,
     )
 
 
@@ -162,6 +228,7 @@ _CODEX_POLL_INTERVAL = 0.5
 _CODEX_STARTUP_TIMEOUT = 15.0
 _CODEX_STATUS_TIMEOUT = 10.0
 _WEEKLY_PCT_RE = re.compile(r"Weekly limit:\s*\[.*?\]\s*(\d+)%\s*left")
+_CODEX_RESET_RE = re.compile(r"Weekly limit:.*?\(resets\s+(\d{1,2}:\d{2})\s+on\s+(\d{1,2}\s+[A-Z][a-z]{2})\)")
 _ACCOUNT_RE = re.compile(r"Account:\s*\S+\s*\((\w+)\)")
 
 
@@ -278,7 +345,9 @@ def _check_codex_status() -> ProviderCapacity | None:
         _tmux_kill(_TMUX_SESSION)
 
 
-def _parse_codex_status(output: str) -> ProviderCapacity | None:
+def _parse_codex_status(
+    output: str, *, now: datetime | None = None
+) -> ProviderCapacity | None:
     """Extract weekly limit from codex /status output.
 
     Returns None if the weekly-limit line hasn't rendered yet.
@@ -288,6 +357,18 @@ def _parse_codex_status(output: str) -> ProviderCapacity | None:
         return None
 
     remaining = int(m.group(1))
+    reset_match = _CODEX_RESET_RE.search(output)
+    current_time = now or datetime.now(UTC)
+    window_used = (
+        _parse_reset(
+            f"{reset_match.group(2)} {reset_match.group(1)}",
+            "%d %b %H:%M",
+            now=current_time,
+            duration=timedelta(days=7),
+        )
+        if reset_match is not None
+        else None
+    )
 
     account_match = _ACCOUNT_RE.search(output)
     plan = account_match.group(1) if account_match else "unknown"
@@ -298,6 +379,9 @@ def _parse_codex_status(output: str) -> ProviderCapacity | None:
         remaining_pct=float(remaining),
         detail=f"codex {plan}: {remaining}% weekly left",
         auth_method="oauth",
+        token_used_pct=float(100 - remaining),
+        window_used_pct=window_used,
+        window_name="week",
     )
 
 
@@ -321,6 +405,7 @@ _GROK_WEEKLY_BAR_RE = re.compile(
 _GROK_USD_RE = re.compile(
     r"\$(\d+(?:\.\d+)?)\s*/\s*\$(\d+(?:\.\d+)?)",
 )
+_GROK_RESET_RE = re.compile(r"Resets:\s*([A-Z][a-z]+\s+\d{1,2},\s+\d{1,2}:\d{2})")
 
 
 def _check_grok_subscription() -> ProviderCapacity:
@@ -413,7 +498,9 @@ def _check_grok_usage() -> ProviderCapacity | None:
         _tmux_kill(_GROK_TMUX_SESSION)
 
 
-def _parse_grok_usage(output: str) -> ProviderCapacity | None:
+def _parse_grok_usage(
+    output: str, *, now: datetime | None = None
+) -> ProviderCapacity | None:
     """Extract weekly remaining from grok TUI ``/usage``.
 
     Returns None if the weekly-limit line has not rendered yet.
@@ -429,6 +516,18 @@ def _parse_grok_usage(output: str) -> ProviderCapacity | None:
     plan = bar.group(1).strip() if bar else "unknown"
     remaining_pct = float(100 - int(bar.group(2))) if bar is not None else None
     remaining_usd = float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+    reset_match = _GROK_RESET_RE.search(output)
+    current_time = now or datetime.now(UTC)
+    window_used = (
+        _parse_reset(
+            reset_match.group(1),
+            "%B %d, %H:%M",
+            now=current_time,
+            duration=timedelta(days=7),
+        )
+        if reset_match is not None
+        else None
+    )
 
     if remaining_pct is not None:
         available = remaining_pct > 2
@@ -446,6 +545,9 @@ def _parse_grok_usage(output: str) -> ProviderCapacity | None:
         remaining_usd=remaining_usd,
         detail=detail,
         auth_method="oauth",
+        token_used_pct=float(100 - remaining_pct) if remaining_pct is not None else None,
+        window_used_pct=window_used,
+        window_name="week" if remaining_pct is not None else None,
     )
 
 
@@ -484,10 +586,59 @@ def _parse_grok_models(output: str) -> ProviderCapacity:
     return ProviderCapacity("xai", available=False, detail="not on subscription")
 
 
-def check_all() -> dict[str, ProviderCapacity]:
-    return {
+def _load_cached_capacities() -> dict[str, ProviderCapacity] | None:
+    """Load a fresh cross-process capacity snapshot, if one exists."""
+    try:
+        payload = json.loads(_CAPACITY_CACHE_PATH.read_text(encoding="utf-8"))
+        if time.time() >= payload["expires_at"]:
+            return None
+        capacities = {
+            provider: ProviderCapacity(**value)
+            for provider, value in payload["capacities"].items()
+        }
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+    return capacities
+
+
+def _save_cached_capacities(capacities: dict[str, ProviderCapacity]) -> None:
+    """Persist a short-lived capacity snapshot without storing credentials."""
+    try:
+        _CAPACITY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "expires_at": time.time() + _CAPACITY_CACHE_TTL_SECONDS,
+            "capacities": {
+                provider: {
+                    "provider": cap.provider,
+                    "available": cap.available,
+                    "remaining_pct": cap.remaining_pct,
+                    "remaining_usd": cap.remaining_usd,
+                    "detail": cap.detail,
+                    "auth_method": cap.auth_method,
+                    "token_used_pct": cap.token_used_pct,
+                    "window_used_pct": cap.window_used_pct,
+                    "window_name": cap.window_name,
+                }
+                for provider, cap in capacities.items()
+            },
+        }
+        _CAPACITY_CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as exc:
+        logger.debug("capacity cache write failed: %s", exc)
+
+
+def check_all(*, force: bool = False) -> dict[str, ProviderCapacity]:
+    """Return provider capacities, reusing a 30-minute local snapshot by default."""
+    if not force:
+        cached = _load_cached_capacities()
+        if cached is not None:
+            return cached
+
+    capacities = {
         "anthropic": check_anthropic(),
         "openrouter": check_openrouter(),
         "openai": check_openai(),
         "xai": check_xai(),
     }
+    _save_cached_capacities(capacities)
+    return capacities
