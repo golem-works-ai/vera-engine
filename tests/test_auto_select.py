@@ -138,6 +138,21 @@ def test_filters_by_provider():
     assert sel.model.provider == "openrouter"
 
 
+def test_select_model_engines_allowlist():
+    config = _uniform_config()
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        sel = select_model(config, engines={"grok"})
+    assert sel.model.engine == "grok"
+    assert sel.model.engine not in {"opencode", "claude-code"}
+
+
+def test_select_model_engine_not_in_engines_raises():
+    config = _uniform_config()
+    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
+        with pytest.raises(ValueError, match="is not in engines allowlist"):
+            select_model(config, engine="opencode", engines={"grok"})
+
+
 def test_raises_when_none_available():
     config = EngineConfig(provider_ratios={})
     with patch("vera_engine.auto_select.check_all", return_value=_none_available()):
@@ -550,6 +565,22 @@ def test_resolve_request_probe_false_does_not_call_check_all(tmp_path, monkeypat
     resolved = resolve_request(req, _uniform_config(), probe=False)
     assert resolved.engine
     assert resolved.model
+
+
+def test_resolve_request_probe_true_forwards_engines(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "vera_engine.auto_select.check_all",
+        lambda: _all_healthy(),
+    )
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay)
+    resolved = resolve_request(req, _uniform_config(), probe=True, engines={"opencode"})
+    assert resolved.engine in {"opencode"}
+
+
+def test_resolve_request_probe_false_forwards_engines(tmp_path):
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay)
+    resolved = resolve_request(req, _uniform_config(), probe=False, engines={"opencode"})
+    assert resolved.engine in {"opencode"}
 
 
 def test_build_and_run_resolves_missing_engine(tmp_path, monkeypatch):

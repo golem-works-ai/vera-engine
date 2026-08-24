@@ -126,6 +126,7 @@ def resolve_request(
         sel = select_model(
             config,
             engine=request.engine,
+            engines=engines,
             tier=request.tier,
             exclude=request.exclude,
             provider=provider,
@@ -147,6 +148,7 @@ def select_model(
     config: EngineConfig,
     *,
     engine: str | None = None,
+    engines: frozenset[str] | set[str] | None = None,
     provider: str | None = None,
     tier: Tier | None = None,
     exclude: frozenset[str] | set[str] | None = None,
@@ -161,6 +163,10 @@ def select_model(
     after failure: blacklist the model that just failed, call again with
     the same tier, and vera-engine picks the next cheapest.
 
+    ``engines`` restricts selection to a set of engines (e.g. ``{"grok"}``).
+    ``engine`` and ``engines`` together raise when ``engine`` is not in the
+    allowlist, matching ``qualifying_models``.
+
     Returns a Selection with the model, inferred credential strategy,
     and effective cost. Raises ValueError if nothing is usable.
     """
@@ -169,7 +175,12 @@ def select_model(
     candidates = [
         spec
         for spec in qualifying_models(
-            config, engine=engine, provider=provider, tier=tier, exclude=exclude
+            config,
+            engine=engine,
+            engines=engines,
+            provider=provider,
+            tier=tier,
+            exclude=exclude,
         )
         if spec.provider in usable
     ]
