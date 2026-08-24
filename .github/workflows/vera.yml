@@ -1,4 +1,4 @@
-# vera-template-version: 2026.08.01.2
+# vera-template-version: 2026.08.24.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -57,13 +57,31 @@ on:
         required: false
         default: ""
         type: string
+      assignee_secret_suffix:
+        description: "Secret-name suffix for an admin assignee's personal engine credential"
+        required: false
+        default: ""
+        type: string
+      runner_label:
+        description: "Runner pool label to run this job on"
+        required: false
+        default: "vera-runners"
+        type: string
 
 jobs:
   vera:
-    runs-on: vera-runners
+    runs-on: ${{ inputs.runner_label || 'vera-runners' }}
     timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # Dynamic credential mappings for admin-testing lanes (issue #6379). They
+      # name no personal secret literally — the suffix is a dispatch input, so
+      # a personnel change is a repo-secret change, never a template change. An
+      # unset secret resolves to "" and the server-composed exec script's
+      # presence test then runs the standard runtime. This is data, not a
+      # runtime branch: the template gains no engine-specific logic.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', inputs.assignee_secret_suffix)] }}
+      CODEX_API_KEY: ${{ secrets[format('CODEX_API_KEY_{0}', inputs.assignee_secret_suffix)] }}
     permissions:
       contents: write
       issues: write
@@ -150,6 +168,23 @@ jobs:
               # post the terminal callback comment.
               touch /tmp/vera_callback_sent
               exit 0
+            fi
+            # Issue #6878: 502/504/503 are Fly edge signals (no healthy
+            # instance, upstream not ready or timed out) and are transient by
+            # construction; 500 stays fatal because it is an application
+            # exception that the server-side classifier retries faster.
+            if [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ] || [ "$HTTP_CODE" = "504" ]; then
+              ATTEMPT=$((ATTEMPT + 1))
+              if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+                echo "::error::vera-creds: budget exhausted after ${MAX_ATTEMPTS} attempts, last HTTP ${HTTP_CODE}"
+                printf '%s\n' "$BODY"
+                printf '%s' "runner-credential-exchange-failed: budget exhausted after ${MAX_ATTEMPTS} attempts of HTTP ${HTTP_CODE}" \
+                  > /tmp/vera_step_failure_reason
+                exit 1
+              fi
+              # No jq here: a Fly proxy 502/503 returns HTML, not JSON.
+              sleep "${SLEEP_SECONDS}"
+              continue
             fi
             echo "::error::vera-creds: non-retryable HTTP ${HTTP_CODE} on attempt $((ATTEMPT + 1))"
             printf '%s\n' "$BODY"
@@ -309,14 +344,22 @@ jobs:
           # Read the raw outcome JSON as a single compact object (or null) and
           # let jq attach it — no shell string splicing into the JSON literal.
           OUTCOME_JSON=$(jq -c . /tmp/vera_outcome.json 2>/dev/null || echo null)
+          # Runtime manifest (issue #6379). The exec script's engine chooser
+          # writes it BEFORE the engine runs, so engine/model/CLI-version
+          # attribution is a procedural record rather than a model self-report.
+          # A top-level sibling of `outcome`, not a key inside it: it is
+          # runner-written, so it is not an agent-authored outcome extension.
+          MANIFEST_JSON=$(jq -c . /tmp/vera_manifest.json 2>/dev/null || echo null)
           PAYLOAD=$(jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
             --arg status "$STATUS" \
             --arg error "$ERROR_MSG" \
             --argjson outcome "${OUTCOME_JSON:-null}" \
+            --argjson manifest "${MANIFEST_JSON:-null}" \
             '{job_id:$job_id, token:$token, status:$status}
              + (if $error != "" then {error:$error} else {} end)
+             + (if $manifest != null then {manifest:$manifest} else {} end)
              + (if $outcome != null then {outcome:$outcome} else {} end)')
           # Layer 1+3: a failed callback POST must fail the step (loud, not a
           # warning). On a confirmed 2xx, drop the sentinel that gates the
@@ -407,12 +450,20 @@ jobs:
           # forwarding the raw outcome object here does not change that
           # constraint, it is enforced server-side at render time.
           OUTCOME_JSON=$(jq -c . /tmp/vera_outcome.json 2>/dev/null || echo null)
+          # Runtime manifest (issue #6379). The exec script's engine chooser
+          # writes it BEFORE the engine runs, so engine/model/CLI-version
+          # attribution is a procedural record rather than a model self-report.
+          # A top-level sibling of `outcome`, not a key inside it: it is
+          # runner-written, so it is not an agent-authored outcome extension.
+          MANIFEST_JSON=$(jq -c . /tmp/vera_manifest.json 2>/dev/null || echo null)
           PAYLOAD=$(jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
             --arg error "$ERROR_MSG" \
             --argjson outcome "${OUTCOME_JSON:-null}" \
+            --argjson manifest "${MANIFEST_JSON:-null}" \
             '{job_id:$job_id, token:$token, status:"failed", error:$error}
+             + (if $manifest != null then {manifest:$manifest} else {} end)
              + (if $outcome != null then {outcome:$outcome} else {} end)')
           # Layer 1+3: a failed callback POST must fail the step (loud, not a
           # warning). On a confirmed 2xx, drop the sentinel that gates the
@@ -544,5 +595,18 @@ jobs:
             LOG_TAIL=$(tail -n 20 /tmp/vera_agent.log)
             BODY="${BODY}"$'\n\n'"**Agent log tail**"$'\n\n'"\`\`\`"$'\n'"${LOG_TAIL}"$'\n'"\`\`\`"
           fi
-          BODY="${BODY}"$'\n\n'"🤖 Generated with Claude Opus 4.7"
+          # Issue #6379: attribution comes from the runtime manifest the exec
+          # script's chooser wrote before the engine ran — never a hardcoded
+          # model name that silently rots, and never a model self-report. No
+          # manifest (the failsafe fires before the exec script) degrades to the
+          # generic system footer rather than naming a model that may not have run.
+          FOOTER="🤖 Generated with Vera"
+          if [ -f /tmp/vera_manifest.json ]; then
+            MANIFEST_LABEL=$(jq -r '[.engine, .model, .cli_version] | map(select(. != null and . != "")) | join(" ")' \
+              /tmp/vera_manifest.json 2>/dev/null || true)
+            if [ -n "$MANIFEST_LABEL" ]; then
+              FOOTER="🤖 Generated with ${MANIFEST_LABEL}"
+            fi
+          fi
+          BODY="${BODY}"$'\n\n'"${FOOTER}"
           gh issue comment "$ORIGINATING_REF" --repo "$GITHUB_REPOSITORY" --body "$BODY"
