@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
@@ -34,12 +36,13 @@ class GrokBuilder(EngineBuilder):
         )
         prompt_path = request.workspace / DEFAULT_PROMPT_FILENAME
 
+        output_format = "json" if request.structured_output else "plain"
         argv: list[str] = [
             "grok",
             "--prompt-file",
             str(prompt_path),
             "--output-format",
-            "plain",
+            output_format,
             "--always-approve",
         ]
 
@@ -48,6 +51,9 @@ class GrokBuilder(EngineBuilder):
             argv.extend(["-m", model])
 
         argv.extend(["--reasoning-effort", request.effort])
+
+        if request.resume:
+            argv.extend(["--resume", request.resume])
 
         env: dict[str, str | SecretRef] = {}
 
@@ -69,4 +75,17 @@ class GrokBuilder(EngineBuilder):
             timeout_seconds=request.timeout_seconds,
             files=(prompt_file,),
             prompt_path=prompt_path,
+            resume=request.resume,
         )
+
+    def parse_session_id(self, stdout: str) -> str | None:
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        sid = data.get("sessionId")
+        if isinstance(sid, str) and sid:
+            return sid
+        return None

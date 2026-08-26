@@ -113,3 +113,32 @@ def test_frozen_dataclass_is_immutable(tmp_path):
 def test_workspace_accepts_path(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
     assert isinstance(req.workspace, Path)
+
+
+def test_resume_defaults_to_none(tmp_path):
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
+    assert req.resume is None
+
+
+def test_structured_output_defaults_false(tmp_path):
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
+    assert req.structured_output is False
+
+
+def test_resume_stored(tmp_path):
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, resume="abc-123"
+    )
+    assert req.resume == "abc-123"
+
+
+def test_structured_output_stored(tmp_path):
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, structured_output=True
+    )
+    assert req.structured_output is True
+
+
+def test_empty_resume_raises(tmp_path):
+    with pytest.raises(ValueError, match="resume must not be empty"):
+        AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, resume="")

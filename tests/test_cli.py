@@ -94,6 +94,30 @@ def test_parser_run_prompt_file_option():
     assert args.prompt_file == Path("prompt.txt")
 
 
+def test_parser_run_resume_option():
+    args = _build_parser().parse_args(
+        ["run", "--engine", "codex", "--prompt", "hi", "--resume", "sess-1"]
+    )
+    assert args.resume == "sess-1"
+
+
+def test_parser_run_resume_defaults_none():
+    args = _build_parser().parse_args(["run", "--engine", "codex", "--prompt", "hi"])
+    assert args.resume is None
+
+
+def test_parser_run_structured_output_flag():
+    args = _build_parser().parse_args(
+        ["run", "--engine", "codex", "--prompt", "hi", "--structured-output"]
+    )
+    assert args.structured_output is True
+
+
+def test_parser_run_structured_output_defaults_false():
+    args = _build_parser().parse_args(["run", "--engine", "codex", "--prompt", "hi"])
+    assert args.structured_output is False
+
+
 # --- _collect_credentials ---
 
 
@@ -227,7 +251,7 @@ def test_main_run_reads_prompt_from_file(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         captured["invocation"] = invocation
         captured["bundle"] = bundle
         return RunResult(
@@ -247,7 +271,7 @@ def test_main_run_reads_prompt_from_file(tmp_path, monkeypatch):
 def test_main_run_success_prints_stdout_returns_returncode(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=0, stdout="engine output\n", stderr="", timed_out=False,
             engine=invocation.engine, argv=invocation.argv,
@@ -265,7 +289,7 @@ def test_main_run_success_prints_stdout_returns_returncode(tmp_path, monkeypatch
 def test_main_run_nonzero_returncode_propagates(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=7, stdout="", stderr="boom", timed_out=False,
             engine=invocation.engine, argv=invocation.argv,
@@ -282,7 +306,7 @@ def test_main_run_nonzero_returncode_propagates(tmp_path, monkeypatch):
 def test_main_run_timeout_returns_124(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=-1, stdout="", stderr="", timed_out=True,
             engine=invocation.engine, argv=invocation.argv,
@@ -314,7 +338,7 @@ def test_main_run_missing_credentials_exits_before_render(tmp_path, monkeypatch)
 def test_main_run_none_strategy_needs_no_credentials(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=0, stdout="", stderr="", timed_out=False,
             engine=invocation.engine, argv=invocation.argv,
@@ -348,7 +372,7 @@ def test_main_engine_plus_tier_without_model_selects(tmp_path, monkeypatch):
     fake_select = MagicMock(return_value=sel)
     captured = {}
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         captured["invocation"] = invocation
         return RunResult(
             returncode=0, stdout="ok", stderr="", timed_out=False,
@@ -391,7 +415,7 @@ def test_main_engine_without_model_or_tier_skips_select(tmp_path, monkeypatch):
     fake_cheapest = MagicMock()
     fake_model = MagicMock()
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=0, stdout="", stderr="", timed_out=False,
             engine=invocation.engine, argv=invocation.argv,
@@ -415,7 +439,7 @@ def test_main_omitted_engine_and_model_still_probes(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
     fake_select = MagicMock(return_value=_clay_codex_selection())
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
             returncode=0, stdout="", stderr="", timed_out=False,
             engine=invocation.engine, argv=invocation.argv,
@@ -429,3 +453,78 @@ def test_main_omitted_engine_and_model_still_probes(tmp_path, monkeypatch):
 
     assert rc == 0
     fake_select.assert_called_once()
+
+
+def test_main_resume_flag_builds_resume_invocation(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    captured = {}
+
+    def fake_render_local(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        captured["builder"] = builder
+        return RunResult(
+            returncode=0, stdout="", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    with patch("vera_engine.cli.render_local", fake_render_local):
+        rc = main(
+            [
+                "run", "--engine", "codex", "--workspace", str(tmp_path),
+                "--prompt", "hi", "--resume", "thr-1",
+            ]
+        )
+
+    assert rc == 0
+    argv = captured["invocation"].argv
+    assert "resume" in argv
+    assert argv[argv.index("resume") + 1] == "thr-1"
+    assert captured["invocation"].resume == "thr-1"
+    # CLI forwards the builder so session_id can be parsed.
+    assert captured["builder"] is not None
+    assert captured["builder"].engine_name == "codex"
+
+
+def test_main_structured_output_flag_builds_json_invocation(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    captured = {}
+
+    def fake_render_local(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        return RunResult(
+            returncode=0, stdout="", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    with patch("vera_engine.cli.render_local", fake_render_local):
+        rc = main(
+            [
+                "run", "--engine", "codex", "--workspace", str(tmp_path),
+                "--prompt", "hi", "--structured-output",
+            ]
+        )
+
+    assert rc == 0
+    assert "--json" in captured["invocation"].argv
+
+
+def test_main_resume_failure_surfaces_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+
+    from vera_engine.render.local import ResumeFailedError
+
+    def fake_render_local(invocation, bundle, builder=None):
+        raise ResumeFailedError("dead", 3, invocation.engine, "boom")
+
+    with patch("vera_engine.cli.render_local", fake_render_local):
+        rc = main(
+            [
+                "run", "--engine", "codex", "--workspace", str(tmp_path),
+                "--prompt", "hi", "--resume", "dead",
+            ]
+        )
+
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "resume" in err.lower()
+    assert "dead" in err

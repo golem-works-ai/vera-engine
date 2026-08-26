@@ -118,3 +118,41 @@ def test_run_result_is_frozen():
     )
     with pytest.raises(Exception):
         result.returncode = 1
+
+
+def test_run_result_session_id_defaults_to_none():
+    result = RunResult(
+        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+    )
+    assert result.session_id is None
+
+
+def test_run_result_session_id_stored():
+    result = RunResult(
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
+        session_id="sess-xyz",
+    )
+    assert result.session_id == "sess-xyz"
+
+
+def test_engine_invocation_resume_defaults_to_none(tmp_path):
+    inv = EngineInvocation(
+        engine="codex", argv=("codex",), env={}, workdir=tmp_path
+    )
+    assert inv.resume is None
+
+
+def test_engine_invocation_resume_stored(tmp_path):
+    inv = EngineInvocation(
+        engine="codex",
+        argv=("codex",),
+        env={},
+        workdir=tmp_path,
+        resume="abc-123",
+    )
+    assert inv.resume == "abc-123"

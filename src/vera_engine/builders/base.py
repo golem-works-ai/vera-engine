@@ -38,6 +38,16 @@ class EngineBuilder(ABC):
         """Default model for this engine, or None if the engine picks its own."""
         ...
 
+    @abstractmethod
+    def parse_session_id(self, stdout: str) -> str | None:
+        """Extract a session id from engine stdout.
+
+        Returns the session id when the engine emitted structured output
+        carrying one, or None when no session id could be found (e.g. the
+        run did not request structured output, or the output was not JSON).
+        """
+        ...
+
     def validate_strategy(self, strategy: str) -> None:
         """Raise if the strategy is not supported by this engine."""
         if strategy not in self.supported_strategies:

@@ -12,9 +12,35 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vera_engine.credentials import CredentialBundle, SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+
+if TYPE_CHECKING:
+    from vera_engine.builders.base import EngineBuilder
+
+
+class ResumeFailedError(RuntimeError):
+    """A resume invocation exited non-zero.
+
+    The session id being resumed is likely invalid or stale. Failing fast
+    here surfaces the problem instead of returning empty output silently.
+    Timeouts are not considered a resume failure — the subprocess did not
+    exit, it was killed.
+    """
+
+    def __init__(
+        self, resume: str, returncode: int, engine: str, stderr: str
+    ) -> None:
+        self.resume = resume
+        self.returncode = returncode
+        self.engine = engine
+        self.stderr = stderr
+        super().__init__(
+            f"resume of session {resume!r} on engine {engine!r} "
+            f"exited non-zero (code {returncode})"
+        )
 
 
 def _resolve_env(
@@ -106,8 +132,15 @@ def _cleanup_files(paths: list[Path]) -> None:
 def render_local(
     invocation: EngineInvocation,
     bundle: CredentialBundle,
+    builder: EngineBuilder | None = None,
 ) -> RunResult:
-    """Spawn the engine subprocess locally and return the result."""
+    """Spawn the engine subprocess locally and return the result.
+
+    When ``builder`` is provided, its ``parse_session_id`` is invoked on the
+    captured stdout to populate ``RunResult.session_id``. A resume invocation
+    (``invocation.resume`` set) that exits non-zero raises
+    ``ResumeFailedError``; a timeout is not treated as a resume failure.
+    """
     resolved_env = _resolve_env(invocation.env, bundle)
 
     # Create hermetic HOME if needed.
@@ -135,6 +168,20 @@ def render_local(
                 text=True,
                 timeout=invocation.timeout_seconds,
             )
+            # Fail fast: a resume that exits non-zero almost certainly means
+            # the session id is invalid or stale. Timeouts fall through to the
+            # except branch below and are reported as a timeout, not a resume
+            # failure.
+            if invocation.resume is not None and result.returncode != 0:
+                raise ResumeFailedError(
+                    invocation.resume,
+                    result.returncode,
+                    invocation.engine,
+                    result.stderr,
+                )
+            session_id = (
+                builder.parse_session_id(result.stdout) if builder is not None else None
+            )
             return RunResult(
                 returncode=result.returncode,
                 stdout=result.stdout,
@@ -142,6 +189,7 @@ def render_local(
                 timed_out=False,
                 engine=invocation.engine,
                 argv=invocation.argv,
+                session_id=session_id,
             )
         except subprocess.TimeoutExpired as exc:
             return RunResult(
@@ -151,6 +199,7 @@ def render_local(
                 timed_out=True,
                 engine=invocation.engine,
                 argv=invocation.argv,
+                session_id=None,
             )
         finally:
             _cleanup_files(cleanup_paths)

@@ -30,6 +30,8 @@ class AgentRunRequest:
     tier: Tier | None = None
     exclude: frozenset[str] = field(default_factory=frozenset)
     pins: frozenset[str] | None = None
+    resume: str | None = None
+    structured_output: bool = False
 
     def __post_init__(self) -> None:
         if self.engine is not None and self.engine == "":
@@ -47,6 +49,8 @@ class AgentRunRequest:
             )
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if self.resume is not None and not self.resume.strip():
+            raise ValueError("resume must not be empty")
         reject_credential_fields(type(self))
 
 

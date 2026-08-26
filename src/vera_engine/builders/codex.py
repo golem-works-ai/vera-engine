@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation
@@ -28,6 +30,10 @@ class CodexBuilder(EngineBuilder):
         model = request.model or self.default_model()
 
         argv: list[str] = ["codex", "exec"]
+        if request.resume:
+            argv.extend(["resume", request.resume])
+        if request.structured_output:
+            argv.append("--json")
         if model:
             argv.extend(["--model", model])
         # codex exec reads effort from -c model_reasoning_effort, not from a --effort flag.
@@ -50,4 +56,23 @@ class CodexBuilder(EngineBuilder):
             workdir=request.workspace,
             home_strategy="real",
             timeout_seconds=request.timeout_seconds,
+            resume=request.resume,
         )
+
+    def parse_session_id(self, stdout: str) -> str | None:
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") != "thread.started":
+                continue
+            tid = data.get("thread_id")
+            if isinstance(tid, str) and tid:
+                return tid
+        return None

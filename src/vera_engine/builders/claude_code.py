@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
@@ -43,9 +45,15 @@ class ClaudeCodeBuilder(EngineBuilder):
 
         argv: list[str] = ["claude", "-p", str(prompt_path), "--verbose"]
 
+        if request.structured_output:
+            argv.extend(["--output-format", "json"])
+
         model = request.model or self.default_model()
         if model:
             argv.extend(["--model", model])
+
+        if request.resume:
+            argv.extend(["--resume", request.resume])
 
         env: dict[str, str | SecretRef] = {}
 
@@ -74,4 +82,17 @@ class ClaudeCodeBuilder(EngineBuilder):
             timeout_seconds=request.timeout_seconds,
             files=(prompt_file,),
             prompt_path=prompt_path,
+            resume=request.resume,
         )
+
+    def parse_session_id(self, stdout: str) -> str | None:
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        sid = data.get("session_id")
+        if isinstance(sid, str) and sid:
+            return sid
+        return None
