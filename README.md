@@ -34,6 +34,24 @@ request = AgentRunRequest(
 result = build_and_run(request, credentials={"ANTHROPIC_API_KEY": "..."})
 ```
 
+### Session resume
+
+Pass `--resume <id>` (or `AgentRunRequest(resume=...)`) to continue an existing
+conversation context without re-sending the full prompt. Pair it with
+`--structured-output` (`structured_output=True`) so the engine emits JSON the
+layer can parse a session id out of; that id is returned on `RunResult.session_id`
+for the next resume call. All four engines support resume.
+
+```bash
+# First run captures a session id
+python -m vera_engine run --engine claude-code --structured-output --prompt "start" --workspace .
+# Follow-up resumes it
+python -m vera_engine run --engine claude-code --resume <session_id> --prompt "next" --workspace .
+```
+
+A resume that exits non-zero fails fast (`ResumeFailedError`) rather than
+returning empty output — the session id is likely invalid or stale.
+
 ### Model costs
 
 `python -m vera_engine models` shows the same effective costs used by
