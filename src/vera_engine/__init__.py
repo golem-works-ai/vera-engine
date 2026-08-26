@@ -16,7 +16,12 @@ from vera_engine.credentials import (
     SecretRef,
     assert_no_credential_shaped_fields,
 )
-from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+from vera_engine.invocation import (
+    EngineInvocation,
+    EngineUsageReport,
+    MaterializedFile,
+    RunResult,
+)
 from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, Tier, TIER_NAMES, get_catalog
 from vera_engine.selection import get_builder, list_engines
 from vera_engine.render.local import render_local
@@ -29,6 +34,7 @@ __all__ = [
     "EngineConfig",
     "FORBIDDEN_FIELD_PATTERN",
     "EngineInvocation",
+    "EngineUsageReport",
     "MaterializedFile",
     "ModelSpec",
     "PROVIDER_CREDENTIALS",

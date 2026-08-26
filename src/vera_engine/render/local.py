@@ -182,6 +182,11 @@ def render_local(
             session_id = (
                 builder.parse_session_id(result.stdout) if builder is not None else None
             )
+            usage_report = (
+                builder.parse_usage_report(result.stdout)
+                if builder is not None
+                else None
+            )
             return RunResult(
                 returncode=result.returncode,
                 stdout=result.stdout,
@@ -190,16 +195,33 @@ def render_local(
                 engine=invocation.engine,
                 argv=invocation.argv,
                 session_id=session_id,
+                usage_report=usage_report,
             )
         except subprocess.TimeoutExpired as exc:
+            timeout_stdout = (
+                exc.stdout or ""
+                if isinstance(exc.stdout, str)
+                else (exc.stdout or b"").decode("utf-8", errors="replace")
+            )
+            timeout_stderr = (
+                exc.stderr or ""
+                if isinstance(exc.stderr, str)
+                else (exc.stderr or b"").decode("utf-8", errors="replace")
+            )
+            usage_report = (
+                builder.parse_usage_report(timeout_stdout)
+                if builder is not None
+                else None
+            )
             return RunResult(
                 returncode=-1,
-                stdout=exc.stdout or "" if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", errors="replace"),
-                stderr=exc.stderr or "" if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", errors="replace"),
+                stdout=timeout_stdout,
+                stderr=timeout_stderr,
                 timed_out=True,
                 engine=invocation.engine,
                 argv=invocation.argv,
                 session_id=None,
+                usage_report=usage_report,
             )
         finally:
             _cleanup_files(cleanup_paths)

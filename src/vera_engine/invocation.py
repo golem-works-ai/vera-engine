@@ -60,6 +60,22 @@ class EngineInvocation:
 
 
 @dataclass(frozen=True)
+class EngineUsageReport:
+    """Parsed cost/usage envelope emitted by an engine CLI in JSON mode.
+
+    Subscription-OAuth runs bypass vera's LLM proxy (the only existing
+    cost-tracking pipeline), so vera-engine parses the structured output the
+    CLIs already emit (`--output-format json`) and surfaces it here for vera
+    to persist downstream. All fields are optional: a given CLI may emit any
+    subset, and non-JSON output yields a ``None`` report entirely.
+    """
+
+    total_cost_usd: float | None = None
+    usage: dict[str, int] | None = None
+    model_usage: dict[str, dict[str, object]] | None = None
+
+
+@dataclass(frozen=True)
 class RunResult:
     """Result of a local engine run."""
 
@@ -70,6 +86,7 @@ class RunResult:
     engine: str
     argv: tuple[str, ...]
     session_id: str | None = None
+    usage_report: EngineUsageReport | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -78,4 +95,5 @@ class RunResult:
 
 # Validate at import time.
 reject_credential_fields(EngineInvocation)
+reject_credential_fields(EngineUsageReport)
 reject_credential_fields(RunResult)

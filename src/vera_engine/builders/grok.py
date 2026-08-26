@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder
+from vera_engine.builders.base import EngineBuilder, _parse_usage_report
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
 DEFAULT_PROMPT_FILENAME = ".vera-engine-grok-prompt.md"
@@ -89,3 +89,6 @@ class GrokBuilder(EngineBuilder):
         if isinstance(sid, str) and sid:
             return sid
         return None
+
+    def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+        return _parse_usage_report(stdout)

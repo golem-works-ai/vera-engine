@@ -5,7 +5,7 @@ import os
 import pytest
 
 from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.render.local import (
     ResumeFailedError,
     _build_base_env,
@@ -327,6 +327,9 @@ class _FakeBuilder:
     def parse_session_id(self, stdout: str):
         return self._extract(stdout)
 
+    def parse_usage_report(self, stdout: str):
+        return None
+
 
 def test_render_local_parses_session_id_via_builder(tmp_path):
     inv = EngineInvocation(
@@ -415,3 +418,85 @@ def test_resume_failed_error_carries_returncode_and_engine(tmp_path):
     assert exc_info.value.returncode == 3
     assert exc_info.value.engine == "sh"
     assert exc_info.value.resume == "dead"
+
+
+# --- render_local usage_report threading ---
+
+
+class _UsageBuilder:
+    """Builder double exposing both session_id and usage_report hooks."""
+
+    def __init__(self, report: EngineUsageReport | None) -> None:
+        self._report = report
+
+    def parse_session_id(self, stdout: str):
+        return None
+
+    def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+        return self._report
+
+
+def test_render_local_threads_usage_report_via_builder(tmp_path):
+    report = EngineUsageReport(total_cost_usd=0.25)
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", '{"total_cost_usd": 0.25}'),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    builder = _UsageBuilder(report)
+    result = render_local(inv, CredentialBundle(values={}), builder=builder)
+    assert result.usage_report is report
+
+
+def test_render_local_no_builder_leaves_usage_report_none(tmp_path):
+    inv = EngineInvocation(
+        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.usage_report is None
+
+
+def test_render_local_builder_returning_none_usage_report_keeps_none(tmp_path):
+    class _NoneReportBuilder:
+        def parse_session_id(self, stdout: str):
+            return None
+
+        def parse_usage_report(self, stdout: str):
+            return None
+
+    inv = EngineInvocation(
+        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+    )
+    result = render_local(
+        inv, CredentialBundle(values={}), builder=_NoneReportBuilder()
+    )
+    assert result.usage_report is None
+
+
+def test_render_local_timeout_threads_usage_report_from_partial_stdout(tmp_path):
+    report = EngineUsageReport(total_cost_usd=0.01)
+
+    class _TimeoutUsageBuilder:
+        def parse_session_id(self, stdout: str):
+            return None
+
+        def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+            return report
+
+    inv = EngineInvocation(
+        engine="sleep",
+        argv=("sleep", "5"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        timeout_seconds=1,
+    )
+    result = render_local(
+        inv, CredentialBundle(values={}), builder=_TimeoutUsageBuilder()
+    )
+    assert result.timed_out is True
+    # The timeout branch must call parse_usage_report on the captured stdout
+    # and thread the returned report onto the RunResult.
+    assert result.usage_report is report
