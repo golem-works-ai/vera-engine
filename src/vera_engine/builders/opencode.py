@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from vera_engine.builders.base import EngineBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
@@ -30,7 +32,12 @@ class OpenCodeBuilder(EngineBuilder):
         argv: list[str] = ["opencode"]
         if model:
             argv.extend(["-m", model])
-        argv.extend(["run", request.prompt])
+        argv.append("run")
+        if request.resume:
+            argv.extend(["--session", request.resume])
+        if request.structured_output:
+            argv.extend(["--format", "json"])
+        argv.append(request.prompt)
 
         env: dict[str, str | SecretRef] = {}
 
@@ -41,7 +48,6 @@ class OpenCodeBuilder(EngineBuilder):
 
         files: list[MaterializedFile] = []
         if strategy == "proxy":
-            import json
             config = {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
             # Stored body holds $ANTHROPIC_BASE_URL; default is False so literal $ in prompts stay intact.
             files.append(
@@ -66,4 +72,21 @@ class OpenCodeBuilder(EngineBuilder):
             home_strategy="hermetic",
             timeout_seconds=request.timeout_seconds,
             files=tuple(files),
+            resume=request.resume,
         )
+
+    def parse_session_id(self, stdout: str) -> str | None:
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            sid = data.get("sessionID")
+            if isinstance(sid, str) and sid:
+                return sid
+        return None

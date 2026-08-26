@@ -46,6 +46,7 @@ class EngineInvocation:
     timeout_seconds: int = 2400
     files: tuple[MaterializedFile, ...] = ()
     prompt_path: Path | None = None
+    resume: str | None = None
 
     def __post_init__(self) -> None:
         if not self.argv:
@@ -68,6 +69,7 @@ class RunResult:
     timed_out: bool
     engine: str
     argv: tuple[str, ...]
+    session_id: str | None = None
 
     @property
     def succeeded(self) -> bool:

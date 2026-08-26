@@ -19,7 +19,7 @@ from vera_engine.credentials import CredentialBundle, SecretRef
 from vera_engine.models import Tier, TIER_NAMES, get_catalog
 from vera_engine.request import AgentRunRequest
 from vera_engine.selection import get_builder, list_engines
-from vera_engine.render.local import render_local
+from vera_engine.render.local import ResumeFailedError, render_local
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -74,6 +74,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="env-key",
         choices=["env-key", "proxy", "none"],
         help="Credential strategy (default: env-key)",
+    )
+    run_parser.add_argument(
+        "--resume",
+        help="Resume an existing session by its session id",
+    )
+    run_parser.add_argument(
+        "--structured-output",
+        action="store_true",
+        help="Request structured JSON output so a session id can be captured",
     )
 
     # "list" subcommand
@@ -245,13 +254,21 @@ def main(argv: list[str] | None = None) -> int:
         timeout_seconds=args.timeout,
         credential_strategy=strategy,
         tier=tier,
+        resume=args.resume,
+        structured_output=args.structured_output,
     )
 
     builder = get_builder(request.engine)
     invocation = builder.build_invocation(request, request.credential_strategy)
     bundle = _collect_credentials(invocation)
 
-    result = render_local(invocation, bundle)
+    try:
+        result = render_local(invocation, bundle, builder=builder)
+    except ResumeFailedError as exc:
+        if exc.stderr:
+            print(exc.stderr, end="", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)
+        return exc.returncode if exc.returncode else 1
 
     if result.stdout:
         print(result.stdout, end="")

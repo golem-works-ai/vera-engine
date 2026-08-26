@@ -67,4 +67,4 @@ def build_and_run(
     builder = get_builder(resolved.engine)
     invocation = builder.build_invocation(resolved, resolved.credential_strategy)
     bundle = CredentialBundle(values=credentials or {})
-    return render_local(invocation, bundle)
+    return render_local(invocation, bundle, builder=builder)

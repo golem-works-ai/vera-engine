@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from vera_engine.builders.base import EngineBuilder
 from vera_engine.builders.claude_code import ClaudeCodeBuilder, DEFAULT_PROMPT_FILENAME
 from vera_engine.builders.codex import CodexBuilder
 from vera_engine.builders.grok import DEFAULT_PROMPT_FILENAME as GROK_PROMPT_FILENAME
@@ -11,6 +12,31 @@ from vera_engine.builders.grok import GrokBuilder
 from vera_engine.builders.opencode import OpenCodeBuilder
 from vera_engine.credentials import SecretRef
 from vera_engine.request import AgentRunRequest
+
+
+def test_parse_session_id_is_abstract_on_base():
+    # A builder that does not implement parse_session_id cannot be instantiated.
+    class _Stub(EngineBuilder):
+        engine_name = "stub"
+        supported_strategies = frozenset({"none"})
+
+        def default_model(self):
+            return None
+
+        def build_invocation(self, request, strategy):
+            raise NotImplementedError
+
+    with pytest.raises(TypeError):
+        _Stub()  # parse_session_id not implemented
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [ClaudeCodeBuilder(), OpenCodeBuilder(), CodexBuilder(), GrokBuilder()],
+)
+def test_all_builders_implement_parse_session_id(builder):
+    # Empty / unstructured stdout never yields a session id.
+    assert builder.parse_session_id("") is None
 
 
 # --- ClaudeCodeBuilder ---
@@ -81,6 +107,42 @@ def test_claude_code_extra_env_merged_without_override(tmp_path):
     assert inv.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
 
 
+def test_claude_code_structured_output_adds_json_flag(tmp_path):
+    req = AgentRunRequest(
+        engine="claude-code",
+        prompt="x",
+        workspace=tmp_path,
+        structured_output=True,
+    )
+    inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
+    assert "--output-format" in inv.argv
+    assert inv.argv[inv.argv.index("--output-format") + 1] == "json"
+
+
+def test_claude_code_resume_adds_resume_flag(tmp_path):
+    req = AgentRunRequest(
+        engine="claude-code", prompt="x", workspace=tmp_path, resume="sess-abc"
+    )
+    inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
+    assert "--resume" in inv.argv
+    assert inv.argv[inv.argv.index("--resume") + 1] == "sess-abc"
+    assert inv.resume == "sess-abc"
+
+
+def test_claude_code_parse_session_id_top_level_json():
+    builder = ClaudeCodeBuilder()
+    stdout = '{"session_id": "abc-123", "result": "ok"}'
+    assert builder.parse_session_id(stdout) == "abc-123"
+
+
+def test_claude_code_parse_session_id_none_on_plain_text():
+    assert ClaudeCodeBuilder().parse_session_id("just plain text") is None
+
+
+def test_claude_code_parse_session_id_none_on_missing_field():
+    assert ClaudeCodeBuilder().parse_session_id('{"result": "ok"}') is None
+
+
 # --- OpenCodeBuilder ---
 
 
@@ -142,6 +204,45 @@ def test_opencode_extra_env_merged(tmp_path):
     )
     inv = OpenCodeBuilder().build_invocation(req, "env-key")
     assert inv.env["FOO"] == "bar"
+
+
+def test_opencode_structured_output_adds_format_json(tmp_path):
+    req = AgentRunRequest(
+        engine="opencode",
+        prompt="x",
+        workspace=tmp_path,
+        structured_output=True,
+    )
+    inv = OpenCodeBuilder().build_invocation(req, "env-key")
+    assert "--format" in inv.argv
+    assert inv.argv[inv.argv.index("--format") + 1] == "json"
+    # prompt stays last
+    assert inv.argv[-1] == "x"
+
+
+def test_opencode_resume_adds_session_flag(tmp_path):
+    req = AgentRunRequest(
+        engine="opencode", prompt="x", workspace=tmp_path, resume="sess-op-1"
+    )
+    inv = OpenCodeBuilder().build_invocation(req, "env-key")
+    assert "--session" in inv.argv
+    assert inv.argv[inv.argv.index("--session") + 1] == "sess-op-1"
+    assert inv.resume == "sess-op-1"
+
+
+def test_opencode_parse_session_id_ndjson():
+    builder = OpenCodeBuilder()
+    stdout = '{"event":"start"}\n{"sessionID":"op-sess-9"}\n{"event":"end"}'
+    assert builder.parse_session_id(stdout) == "op-sess-9"
+
+
+def test_opencode_parse_session_id_none_on_plain():
+    assert OpenCodeBuilder().parse_session_id("no json here") is None
+
+
+def test_opencode_parse_session_id_none_when_absent():
+    stdout = '{"event":"start"}\n{"event":"end"}'
+    assert OpenCodeBuilder().parse_session_id(stdout) is None
 
 
 # --- CodexBuilder ---
@@ -216,6 +317,59 @@ def test_codex_extra_env_merged_without_override(tmp_path):
     assert inv.env["OTHER"] == "val"
 
 
+def test_codex_structured_output_adds_json_flag(tmp_path):
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, structured_output=True
+    )
+    inv = CodexBuilder().build_invocation(req, "env-key")
+    assert "--json" in inv.argv
+    # prompt stays last
+    assert inv.argv[-1] == "x"
+
+
+def test_codex_resume_restructures_argv(tmp_path):
+    req = AgentRunRequest(
+        engine="codex", prompt="the prompt", workspace=tmp_path, resume="thr-123"
+    )
+    inv = CodexBuilder().build_invocation(req, "env-key")
+    # exec resume <id> ... <prompt>
+    assert inv.argv[0:4] == ("codex", "exec", "resume", "thr-123")
+    assert inv.argv[-1] == "the prompt"
+    assert inv.resume == "thr-123"
+
+
+def test_codex_resume_with_structured_output(tmp_path):
+    req = AgentRunRequest(
+        engine="codex",
+        prompt="p",
+        workspace=tmp_path,
+        resume="thr-1",
+        structured_output=True,
+    )
+    inv = CodexBuilder().build_invocation(req, "env-key")
+    assert "resume" in inv.argv
+    assert inv.argv[inv.argv.index("resume") + 1] == "thr-1"
+    assert "--json" in inv.argv
+
+
+def test_codex_parse_session_id_thread_started():
+    builder = CodexBuilder()
+    stdout = (
+        '{"type":"thread.started","thread_id":"thr-xyz"}\n'
+        '{"type":"message","text":"hi"}'
+    )
+    assert builder.parse_session_id(stdout) == "thr-xyz"
+
+
+def test_codex_parse_session_id_none_when_no_thread_started():
+    stdout = '{"type":"message","text":"hi"}'
+    assert CodexBuilder().parse_session_id(stdout) is None
+
+
+def test_codex_parse_session_id_none_on_garbage():
+    assert CodexBuilder().parse_session_id("not json at all") is None
+
+
 # --- GrokBuilder ---
 
 
@@ -284,3 +438,44 @@ def test_grok_extra_env_merged_without_override(tmp_path):
     inv = GrokBuilder().build_invocation(req, "env-key")
     assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
     assert inv.env["OTHER"] == "val"
+
+
+def test_grok_structured_output_uses_json_format(tmp_path):
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, structured_output=True
+    )
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert "--output-format" in inv.argv
+    assert inv.argv[inv.argv.index("--output-format") + 1] == "json"
+
+
+def test_grok_structured_output_false_keeps_plain(tmp_path):
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, structured_output=False
+    )
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert inv.argv[inv.argv.index("--output-format") + 1] == "plain"
+
+
+def test_grok_resume_adds_resume_flag(tmp_path):
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, resume="g-sess-1"
+    )
+    inv = GrokBuilder().build_invocation(req, "env-key")
+    assert "--resume" in inv.argv
+    assert inv.argv[inv.argv.index("--resume") + 1] == "g-sess-1"
+    assert inv.resume == "g-sess-1"
+
+
+def test_grok_parse_session_id_top_level_json():
+    builder = GrokBuilder()
+    stdout = '{"sessionId": "g-sess-42", "text": "ok"}'
+    assert builder.parse_session_id(stdout) == "g-sess-42"
+
+
+def test_grok_parse_session_id_none_on_plain():
+    assert GrokBuilder().parse_session_id("plain output") is None
+
+
+def test_grok_parse_session_id_none_when_absent():
+    assert GrokBuilder().parse_session_id('{"text": "ok"}') is None

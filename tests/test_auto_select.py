@@ -586,7 +586,7 @@ def test_resolve_request_probe_false_forwards_engines(tmp_path):
 def test_build_and_run_resolves_missing_engine(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_render_local(invocation, bundle):
+    def fake_render_local(invocation, bundle, builder=None):
         captured["invocation"] = invocation
         return RunResult(
             returncode=0,
@@ -611,3 +611,34 @@ def test_build_and_run_resolves_missing_engine(tmp_path, monkeypatch):
     assert captured["invocation"].engine
     assert captured["invocation"].engine in list_engines()
     assert result.engine == captured["invocation"].engine
+
+
+def test_build_and_run_forwards_builder_for_session_id(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_render_local(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        captured["builder"] = builder
+        return RunResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
+        )
+
+    monkeypatch.setattr("vera_engine.render_local", fake_render_local)
+    build_and_run(
+        AgentRunRequest(
+            engine=None,
+            prompt="hi",
+            workspace=tmp_path,
+            tier=Tier.clay,
+            credential_strategy="none",
+            structured_output=True,
+        )
+    )
+    # The builder must be forwarded so RunResult.session_id can be populated.
+    assert captured["builder"] is not None
+    assert captured["builder"].engine_name == captured["invocation"].engine

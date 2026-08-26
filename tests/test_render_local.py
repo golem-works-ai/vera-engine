@@ -7,6 +7,7 @@ import pytest
 from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
 from vera_engine.render.local import (
+    ResumeFailedError,
     _build_base_env,
     _cleanup_files,
     _expand_vars,
@@ -312,3 +313,105 @@ def test_render_local_shared_home_strategy_removed_after_run(tmp_path):
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode == 0
     assert result.stdout == "hi\n"
+
+
+# --- render_local session_id + resume fail-fast ---
+
+
+class _FakeBuilder:
+    """Minimal builder double exposing parse_session_id."""
+
+    def __init__(self, extract):
+        self._extract = extract
+
+    def parse_session_id(self, stdout: str):
+        return self._extract(stdout)
+
+
+def test_render_local_parses_session_id_via_builder(tmp_path):
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", '{"session_id": "sess-1"}'),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    builder = _FakeBuilder(lambda s: __import__("json").loads(s)["session_id"])
+    result = render_local(inv, CredentialBundle(values={}), builder=builder)
+    assert result.session_id == "sess-1"
+
+
+def test_render_local_no_builder_leaves_session_id_none(tmp_path):
+    inv = EngineInvocation(
+        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.session_id is None
+
+
+def test_render_local_resume_nonzero_exit_raises(tmp_path):
+    inv = EngineInvocation(
+        engine="false",
+        argv=("false",),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        resume="bad-session",
+    )
+    with pytest.raises(ResumeFailedError, match="bad-session"):
+        render_local(inv, CredentialBundle(values={}))
+
+
+def test_render_local_resume_timeout_does_not_raise(tmp_path):
+    inv = EngineInvocation(
+        engine="sleep",
+        argv=("sleep", "5"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        timeout_seconds=1,
+        resume="sess-timeout",
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.timed_out is True
+    assert result.session_id is None
+
+
+def test_render_local_resume_success_returns_session_id(tmp_path):
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", '{"session_id": "ok-sess"}'),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        resume="ok-sess",
+    )
+    builder = _FakeBuilder(lambda s: __import__("json").loads(s)["session_id"])
+    result = render_local(inv, CredentialBundle(values={}), builder=builder)
+    assert result.returncode == 0
+    assert result.session_id == "ok-sess"
+
+
+def test_render_local_nonzero_without_resume_does_not_raise(tmp_path):
+    inv = EngineInvocation(
+        engine="false", argv=("false",), env={}, workdir=tmp_path, home_strategy="hermetic"
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.returncode != 0
+    assert result.session_id is None
+
+
+def test_resume_failed_error_carries_returncode_and_engine(tmp_path):
+    inv = EngineInvocation(
+        engine="sh",
+        argv=("sh", "-c", "echo boom; exit 3"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        resume="dead",
+    )
+    with pytest.raises(ResumeFailedError) as exc_info:
+        render_local(inv, CredentialBundle(values={}))
+    assert exc_info.value.returncode == 3
+    assert exc_info.value.engine == "sh"
+    assert exc_info.value.resume == "dead"
