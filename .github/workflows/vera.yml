@@ -1,4 +1,4 @@
-# vera-template-version: 2026.08.24.1
+# vera-template-version: 2026.08.25.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -57,11 +57,6 @@ on:
         required: false
         default: ""
         type: string
-      assignee_secret_suffix:
-        description: "Secret-name suffix for an admin assignee's personal engine credential"
-        required: false
-        default: ""
-        type: string
       runner_label:
         description: "Runner pool label to run this job on"
         required: false
@@ -74,14 +69,6 @@ jobs:
     timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      # Dynamic credential mappings for admin-testing lanes (issue #6379). They
-      # name no personal secret literally — the suffix is a dispatch input, so
-      # a personnel change is a repo-secret change, never a template change. An
-      # unset secret resolves to "" and the server-composed exec script's
-      # presence test then runs the standard runtime. This is data, not a
-      # runtime branch: the template gains no engine-specific logic.
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', inputs.assignee_secret_suffix)] }}
-      CODEX_API_KEY: ${{ secrets[format('CODEX_API_KEY_{0}', inputs.assignee_secret_suffix)] }}
     permissions:
       contents: write
       issues: write
