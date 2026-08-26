@@ -4,42 +4,12 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder
+from vera_engine.builders.base import EngineBuilder, parse_usage_report_json
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
 DEFAULT_PROMPT_FILENAME = ".vera-engine-grok-prompt.md"
-
-
-def _parse_grok_usage_report(stdout: str) -> EngineUsageReport | None:
-    """Parse the cost/usage envelope emitted by ``grok --output-format json``.
-
-    Field names follow the xAI ``grok`` CLI JSON envelope schema: the
-    top-level object carries ``total_cost_usd`` (float), ``usage`` (per-run
-    token counts), and ``modelUsage`` (per-model cost/token breakdown).
-    ``sessionId`` is read separately by :meth:`parse_session_id`.
-
-    Returns None on non-JSON or non-dict output; any subset of fields may be
-    present, with absent fields left as None. ``usage``/``modelUsage`` are
-    only stored when they are themselves dicts, so a malformed envelope cannot
-    smuggle a non-mapping through.
-    """
-    try:
-        data = json.loads(stdout)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    raw_usage = data.get("usage")
-    raw_model_usage = data.get("modelUsage")
-
-    return EngineUsageReport(
-        total_cost_usd=data.get("total_cost_usd"),
-        usage=raw_usage if isinstance(raw_usage, dict) else None,
-        model_usage=raw_model_usage if isinstance(raw_model_usage, dict) else None,
-    )
 
 
 class GrokBuilder(EngineBuilder):
@@ -121,4 +91,13 @@ class GrokBuilder(EngineBuilder):
         return None
 
     def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
-        return _parse_grok_usage_report(stdout)
+        """Parse the cost/usage envelope emitted by ``grok --output-format json``.
+
+        Field names follow the xAI ``grok`` CLI JSON envelope schema: the
+        top-level object carries ``total_cost_usd`` (float), ``usage``
+        (per-run token counts), and ``modelUsage`` (per-model cost/token
+        breakdown). ``sessionId`` is read separately by
+        :meth:`parse_session_id`. Delegates to the shared
+        :func:`parse_usage_report_json` so the parsing stays in one place.
+        """
+        return parse_usage_report_json(stdout)

@@ -2,10 +2,45 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 
 from vera_engine.request import AgentRunRequest
 from vera_engine.invocation import EngineInvocation, EngineUsageReport
+
+
+def parse_usage_report_json(stdout: str) -> EngineUsageReport | None:
+    """Parse the shared cost/usage envelope emitted by CLIs in JSON mode.
+
+    Both the ``claude`` (Claude Code) and ``grok`` (xAI) CLIs emit the same
+    field names under ``--output-format json`` -- ``total_cost_usd``,
+    ``usage``, and ``modelUsage`` -- so the parsing lives here once and both
+    builders delegate to it to avoid copy drift. The session-id key differs
+    in casing between the two CLIs (``session_id`` vs ``sessionId``) and is
+    read separately by each builder's :meth:`parse_session_id`.
+
+    Returns None on non-JSON or non-dict output; any subset of fields may be
+    present, with absent fields left as None. ``usage``/``modelUsage`` are
+    only stored when they are themselves dicts, so a malformed envelope cannot
+    smuggle a non-mapping through.
+    """
+    # Source: claude / grok --output-format json both expose total_cost_usd,
+    # usage, modelUsage (shared JSON envelope).
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    raw_usage = data.get("usage")
+    raw_model_usage = data.get("modelUsage")
+
+    return EngineUsageReport(
+        total_cost_usd=data.get("total_cost_usd"),
+        usage=raw_usage if isinstance(raw_usage, dict) else None,
+        model_usage=raw_model_usage if isinstance(raw_model_usage, dict) else None,
+    )
 
 
 class EngineBuilder(ABC):
