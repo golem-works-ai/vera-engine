@@ -76,7 +76,9 @@ def check_openrouter() -> ProviderCapacity:
         )
     except Exception as exc:
         logger.warning("OpenRouter credits check failed: %s", exc)
-        return ProviderCapacity("openrouter", available=bool(key), detail=f"check failed: {exc}")
+        return ProviderCapacity(
+            "openrouter", available=bool(key), detail=f"check failed: {exc}"
+        )
 
 
 _SUBSCRIPTION_MIN_PCT = 5.0
@@ -92,7 +94,9 @@ def _prefer_subscription(cap: ProviderCapacity) -> bool:
 
 
 def _api_key_capacity(provider: str) -> ProviderCapacity:
-    return ProviderCapacity(provider, available=True, detail="API key set", auth_method="api-key")
+    return ProviderCapacity(
+        provider, available=True, detail="API key set", auth_method="api-key"
+    )
 
 
 def check_anthropic() -> ProviderCapacity:
@@ -114,15 +118,29 @@ def _check_claude_code_subscription() -> ProviderCapacity:
             timeout=15,
         )
         if result.returncode != 0:
-            return ProviderCapacity("anthropic", available=False, detail="claude not available")
+            logger.info(
+                "claude -p /usage exited %d; stderr=%r",
+                result.returncode,
+                (result.stderr or "")[:200],
+            )
+            return ProviderCapacity(
+                "anthropic", available=False, detail="claude not available"
+            )
+        logger.info("claude -p /usage stdout=%r", result.stdout[:500])
         return _parse_claude_usage(result.stdout)
     except FileNotFoundError:
-        return ProviderCapacity("anthropic", available=False, detail="claude CLI not found")
+        return ProviderCapacity(
+            "anthropic", available=False, detail="claude CLI not found"
+        )
     except subprocess.TimeoutExpired:
-        return ProviderCapacity("anthropic", available=False, detail="claude usage check timed out")
+        return ProviderCapacity(
+            "anthropic", available=False, detail="claude usage check timed out"
+        )
     except Exception as exc:
         logger.warning("Claude usage check failed: %s", exc)
-        return ProviderCapacity("anthropic", available=False, detail=f"check failed: {exc}")
+        return ProviderCapacity(
+            "anthropic", available=False, detail=f"check failed: {exc}"
+        )
 
 
 _SESSION_PCT_RE = re.compile(r"Current session:\s*(\d+)%\s*used")
@@ -160,7 +178,9 @@ def _parse_claude_usage(
     output: str, *, now: datetime | None = None
 ) -> ProviderCapacity:
     if "subscription" not in output.lower():
-        return ProviderCapacity("anthropic", available=False, detail="not on subscription")
+        return ProviderCapacity(
+            "anthropic", available=False, detail="not on subscription"
+        )
 
     session_match = _SESSION_PCT_RE.search(output)
     week_match = _WEEK_PCT_RE.search(output)
@@ -178,7 +198,12 @@ def _parse_claude_usage(
     elif session_remaining is not None:
         remaining = session_remaining
     else:
-        return ProviderCapacity("anthropic", available=True, detail="subscription active, usage unknown", auth_method="oauth")
+        return ProviderCapacity(
+            "anthropic",
+            available=True,
+            detail="subscription active, usage unknown",
+            auth_method="oauth",
+        )
 
     parts = []
     if session_remaining is not None:
@@ -196,7 +221,9 @@ def _parse_claude_usage(
     token_used, window_name, reset_re, duration = limiting_window
     reset_match = reset_re.search(output)
     window_used = (
-        _parse_reset(reset_match.group(1), "%b %d, %I:%M%p", now=current_time, duration=duration)
+        _parse_reset(
+            reset_match.group(1), "%b %d, %I:%M%p", now=current_time, duration=duration
+        )
         if reset_match is not None
         else None
     )
@@ -220,7 +247,9 @@ def check_openai() -> ProviderCapacity:
     cap = _check_codex_status()
     if cap is not None:
         return cap
-    return ProviderCapacity("openai", available=False, detail="no key and codex status unavailable")
+    return ProviderCapacity(
+        "openai", available=False, detail="no key and codex status unavailable"
+    )
 
 
 _TMUX_SESSION = "vera-engine-codex-status"
@@ -228,7 +257,9 @@ _CODEX_POLL_INTERVAL = 0.5
 _CODEX_STARTUP_TIMEOUT = 15.0
 _CODEX_STATUS_TIMEOUT = 10.0
 _WEEKLY_PCT_RE = re.compile(r"Weekly limit:\s*\[.*?\]\s*(\d+)%\s*left")
-_CODEX_RESET_RE = re.compile(r"Weekly limit:.*?\(resets\s+(\d{1,2}:\d{2})\s+on\s+(\d{1,2}\s+[A-Z][a-z]{2})\)")
+_CODEX_RESET_RE = re.compile(
+    r"Weekly limit:.*?\(resets\s+(\d{1,2}:\d{2})\s+on\s+(\d{1,2}\s+[A-Z][a-z]{2})\)"
+)
 _ACCOUNT_RE = re.compile(r"Account:\s*\S+\s*\((\w+)\)")
 
 
@@ -236,7 +267,9 @@ def _tmux_capture(session: str) -> str:
     try:
         r = subprocess.run(
             ["tmux", "capture-pane", "-t", session, "-p", "-S", "-80"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return r.stdout if r.returncode == 0 else ""
     except Exception:
@@ -247,7 +280,8 @@ def _tmux_send(session: str, *keys: str) -> None:
     try:
         subprocess.run(
             ["tmux", "send-keys", "-t", session, *keys],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
     except Exception:
         pass
@@ -258,7 +292,8 @@ def _tmux_send_literal(session: str, text: str) -> None:
     try:
         subprocess.run(
             ["tmux", "send-keys", "-t", session, "-l", text],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
     except Exception:
         pass
@@ -268,7 +303,8 @@ def _tmux_kill(session: str) -> None:
     try:
         subprocess.run(
             ["tmux", "kill-session", "-t", session],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
     except Exception:
         pass
@@ -286,7 +322,8 @@ def _check_codex_status() -> ProviderCapacity | None:
     try:
         r = subprocess.run(
             ["tmux", "new-session", "-d", "-s", _TMUX_SESSION, "-x", "120", "-y", "40"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         if r.returncode != 0:
             return None
@@ -303,7 +340,11 @@ def _check_codex_status() -> ProviderCapacity | None:
         while time.monotonic() < deadline:
             time.sleep(_CODEX_POLL_INTERVAL)
             buf = _tmux_capture(_TMUX_SESSION)
-            if not update_dismissed and "Update available" in buf and "Press enter" in buf:
+            if (
+                not update_dismissed
+                and "Update available" in buf
+                and "Press enter" in buf
+            ):
                 _tmux_send(_TMUX_SESSION, "Down", "Enter")
                 update_dismissed = True
                 continue
@@ -515,7 +556,9 @@ def _parse_grok_usage(
 
     plan = bar.group(1).strip() if bar else "unknown"
     remaining_pct = float(100 - int(bar.group(2))) if bar is not None else None
-    remaining_usd = float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+    remaining_usd = (
+        float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+    )
     reset_match = _GROK_RESET_RE.search(output)
     current_time = now or datetime.now(UTC)
     window_used = (
@@ -545,7 +588,9 @@ def _parse_grok_usage(
         remaining_usd=remaining_usd,
         detail=detail,
         auth_method="oauth",
-        token_used_pct=float(100 - remaining_pct) if remaining_pct is not None else None,
+        token_used_pct=float(100 - remaining_pct)
+        if remaining_pct is not None
+        else None,
         window_used_pct=window_used,
         window_name="week" if remaining_pct is not None else None,
     )
@@ -569,7 +614,9 @@ def _check_grok_models() -> ProviderCapacity:
     except FileNotFoundError:
         return ProviderCapacity("xai", available=False, detail="grok CLI not found")
     except subprocess.TimeoutExpired:
-        return ProviderCapacity("xai", available=False, detail="grok models check timed out")
+        return ProviderCapacity(
+            "xai", available=False, detail="grok models check timed out"
+        )
     except Exception as exc:
         logger.warning("Grok models check failed: %s", exc)
         return ProviderCapacity("xai", available=False, detail=f"check failed: {exc}")
