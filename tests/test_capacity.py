@@ -209,6 +209,34 @@ def test_check_anthropic_falls_back_to_claude_cli():
     assert cap.auth_method == "oauth"
 
 
+def test_check_anthropic_scrubs_shadowing_env_vars_from_probe():
+    """Regression for the dead subscription rung (job 22e19e9f, run 33103804316).
+
+    Any of ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN
+    takes precedence over ~/.claude/.credentials.json in claude CLI 2.1.222,
+    even when the credentials file is valid — confirmed by hand. The pool
+    selector sets CLAUDE_CODE_OAUTH_TOKEN on this same process env while
+    ranking tokens, so the probe subprocess must not inherit it.
+    """
+    shadowing = {
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "ANTHROPIC_AUTH_TOKEN": "auth-token-test",
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-test",
+        "OTHER_VAR": "keep-me",
+    }
+    with patch.dict(os.environ, shadowing, clear=True):
+        with patch("vera_engine.capacity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = CLAUDE_USAGE_OUTPUT
+            check_anthropic()
+    called_env = mock_run.call_args.kwargs.get("env")
+    assert called_env is not None
+    assert "ANTHROPIC_API_KEY" not in called_env
+    assert "ANTHROPIC_AUTH_TOKEN" not in called_env
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in called_env
+    assert called_env.get("OTHER_VAR") == "keep-me"
+
+
 def test_check_anthropic_no_key_no_cli():
     with patch.dict(os.environ, {}, clear=True):
         with patch("vera_engine.capacity.subprocess.run", side_effect=FileNotFoundError):
