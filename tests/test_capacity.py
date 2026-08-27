@@ -8,6 +8,7 @@ import pytest
 
 from vera_engine.capacity import (
     ProviderCapacity,
+    _check_claude_code_subscription,
     _check_grok_usage,
     _parse_claude_usage,
     _parse_codex_status,
@@ -65,6 +66,59 @@ def test_parse_claude_usage_not_subscription():
     cap = _parse_claude_usage("You are using API key mode\n")
     assert cap.available is False
     assert "not on subscription" in cap.detail
+
+
+# Reproduced 2026-08-27 (vera#7103/#7104) against live `claude` 2.1.220/2.1.222:
+# a credentials.json written with `accessToken` only, no `scopes` array (the
+# shape `runner_select.write_anthropic_credentials` writes), makes the CLI
+# silently no-op the /usage turn instead of erroring -- exit 0, empty stderr,
+# this session-cost boilerplate. A healthy token then looks identical to a
+# dead one unless the raw output is captured.
+CLAUDE_USAGE_ZERO_FINGERPRINT = """\
+Total cost:            $0.0000
+Total duration (API):  0s
+Total duration (wall): 0s
+Total code changes:    0 lines added, 0 lines removed
+Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+"""
+
+
+def test_parse_claude_usage_zero_usage_fingerprint_flags_auth_failure():
+    cap = _parse_claude_usage(CLAUDE_USAGE_ZERO_FINGERPRINT)
+    assert cap.available is False
+    assert "not on subscription" in cap.detail
+    assert "credential" in cap.detail
+    assert "Total cost" in cap.detail
+
+
+def test_parse_claude_usage_empty_output():
+    cap = _parse_claude_usage("")
+    assert cap.available is False
+    assert "not on subscription" in cap.detail
+
+
+def test_check_claude_code_subscription_logs_raw_output_on_unavailable(caplog):
+    with caplog.at_level("WARNING", logger="vera_engine.capacity"):
+        with patch("vera_engine.capacity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = CLAUDE_USAGE_ZERO_FINGERPRINT
+            mock_run.return_value.stderr = ""
+            cap = _check_claude_code_subscription()
+    assert cap.available is False
+    assert any("exit=0" in record.message for record in caplog.records)
+    assert any("Total cost" in record.message for record in caplog.records)
+
+
+def test_check_claude_code_subscription_logs_raw_output_on_nonzero_exit(caplog):
+    with caplog.at_level("WARNING", logger="vera_engine.capacity"):
+        with patch("vera_engine.capacity.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = "error: not logged in"
+            cap = _check_claude_code_subscription()
+    assert cap.available is False
+    assert any("exit=1" in record.message for record in caplog.records)
+    assert any("not logged in" in record.message for record in caplog.records)
 
 
 CODEX_STATUS_OUTPUT = """\
