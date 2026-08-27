@@ -104,6 +104,27 @@ def check_anthropic() -> ProviderCapacity:
     return sub
 
 
+_RAW_OUTPUT_LOG_CHARS = 2000
+
+
+def _log_raw_probe_failure(reason: str, exit_code: int, stdout: str, stderr: str) -> None:
+    """Log the full `/usage` transcript so a non-available verdict is never a mystery.
+
+    Substring parsing of CLI output cannot tell "genuinely no subscription"
+    apart from "the CLI silently no-op'd" (see the zero-usage fingerprint in
+    ``_parse_claude_usage``) without the raw bytes. Reproduced 2026-08-27
+    (vera#7103): both were logged as identical one-line details with no way
+    to tell them apart after the fact.
+    """
+    logger.warning(
+        "anthropic usage probe non-available (%s): exit=%d stdout=%r stderr=%r",
+        reason,
+        exit_code,
+        stdout[:_RAW_OUTPUT_LOG_CHARS],
+        stderr[:_RAW_OUTPUT_LOG_CHARS],
+    )
+
+
 def _check_claude_code_subscription() -> ProviderCapacity:
     """Parse `claude -p "/usage"` for subscription remaining capacity."""
     try:
@@ -114,8 +135,16 @@ def _check_claude_code_subscription() -> ProviderCapacity:
             timeout=15,
         )
         if result.returncode != 0:
+            _log_raw_probe_failure(
+                "nonzero exit", result.returncode, result.stdout, result.stderr
+            )
             return ProviderCapacity("anthropic", available=False, detail="claude not available")
-        return _parse_claude_usage(result.stdout)
+        capacity = _parse_claude_usage(result.stdout)
+        if not capacity.available:
+            _log_raw_probe_failure(
+                capacity.detail, result.returncode, result.stdout, result.stderr
+            )
+        return capacity
     except FileNotFoundError:
         return ProviderCapacity("anthropic", available=False, detail="claude CLI not found")
     except subprocess.TimeoutExpired:
@@ -125,6 +154,7 @@ def _check_claude_code_subscription() -> ProviderCapacity:
         return ProviderCapacity("anthropic", available=False, detail=f"check failed: {exc}")
 
 
+_ZERO_USAGE_FINGERPRINT_RE = re.compile(r"Total cost:\s+\$0\.0000")
 _SESSION_PCT_RE = re.compile(r"Current session:\s*(\d+)%\s*used")
 _WEEK_PCT_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used")
 _CLAUDE_SESSION_RESET_RE = re.compile(
@@ -160,7 +190,25 @@ def _parse_claude_usage(
     output: str, *, now: datetime | None = None
 ) -> ProviderCapacity:
     if "subscription" not in output.lower():
-        return ProviderCapacity("anthropic", available=False, detail="not on subscription")
+        raw = output[:_RAW_OUTPUT_LOG_CHARS]
+        if _ZERO_USAGE_FINGERPRINT_RE.search(output):
+            # Reproduced 2026-08-27 (vera#7103/#7104): a credentials.json
+            # written with accessToken only, no `scopes` array, makes the CLI
+            # silently skip the /usage turn -- exit 0, no stderr, this
+            # zero-cost session summary instead of an error or the report.
+            # A healthy token then reads identically to a dead one.
+            return ProviderCapacity(
+                "anthropic",
+                available=False,
+                detail=(
+                    "not on subscription (CLI returned a zero-usage session "
+                    f"summary instead of /usage output -- likely a broken "
+                    f"credential rather than a real subscription check: {raw!r})"
+                ),
+            )
+        return ProviderCapacity(
+            "anthropic", available=False, detail=f"not on subscription (raw: {raw!r})"
+        )
 
     session_match = _SESSION_PCT_RE.search(output)
     week_match = _WEEK_PCT_RE.search(output)
