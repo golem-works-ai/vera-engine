@@ -108,14 +108,41 @@ def check_anthropic() -> ProviderCapacity:
     return sub
 
 
+# Confirmed by hand against claude CLI 2.1.222: any of these three takes
+# precedence over the ~/.claude/.credentials.json OAuth login the interactive
+# `claude.ai` session uses, even when the credentials file is valid and the
+# value is a real access token. `/usage` then degrades to a bare cost line
+# with no "subscription" text, so ``_parse_claude_usage`` misreads a live
+# subscription as absent. The pool selector (vera's runner_select.py) sets
+# CLAUDE_CODE_OAUTH_TOKEN on the very same env before ranking each token
+# (see its ``_best_anthropic``), so scrubbing here — not there — is what
+# makes every caller of this probe safe.
+_SHADOWING_ANTHROPIC_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
+
+# A real /usage round trip against Anthropic's backend can run past 15s under
+# load; the old value produced the "claude usage check timed out" verdict on
+# a token that was in fact fine (job 22e19e9f, run 33103804316).
+_CLAUDE_USAGE_TIMEOUT_SECONDS = 45
+
+
 def _check_claude_code_subscription() -> ProviderCapacity:
     """Parse `claude -p "/usage"` for subscription remaining capacity."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _SHADOWING_ANTHROPIC_ENV_VARS
+    }
     try:
         result = subprocess.run(
             ["claude", "-p", "/usage"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=_CLAUDE_USAGE_TIMEOUT_SECONDS,
+            env=env,
         )
         if result.returncode != 0:
             logger.info(
