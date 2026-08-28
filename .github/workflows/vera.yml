@@ -1,4 +1,4 @@
-# vera-template-version: 2026.08.25.1
+# vera-template-version: 2026.08.27.2
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -337,6 +337,11 @@ jobs:
           # A top-level sibling of `outcome`, not a key inside it: it is
           # runner-written, so it is not an agent-authored outcome extension.
           MANIFEST_JSON=$(jq -c . /tmp/vera_manifest.json 2>/dev/null || echo null)
+          # Pool capacity samples (issue #7059 design C). The pool selector
+          # writes this only when it ranked at least one Anthropic token; a
+          # metered job with no pool never produces the file, same as the
+          # manifest's own "absence is a valid state" contract.
+          POOL_CAPACITY_JSON=$(jq -c . /tmp/vera_pool_capacity.json 2>/dev/null || echo null)
           PAYLOAD=$(jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
@@ -344,9 +349,11 @@ jobs:
             --arg error "$ERROR_MSG" \
             --argjson outcome "${OUTCOME_JSON:-null}" \
             --argjson manifest "${MANIFEST_JSON:-null}" \
+            --argjson pool_capacity "${POOL_CAPACITY_JSON:-null}" \
             '{job_id:$job_id, token:$token, status:$status}
              + (if $error != "" then {error:$error} else {} end)
              + (if $manifest != null then {manifest:$manifest} else {} end)
+             + (if $pool_capacity != null then {pool_capacity:$pool_capacity} else {} end)
              + (if $outcome != null then {outcome:$outcome} else {} end)')
           # Layer 1+3: a failed callback POST must fail the step (loud, not a
           # warning). On a confirmed 2xx, drop the sentinel that gates the
@@ -443,14 +450,19 @@ jobs:
           # A top-level sibling of `outcome`, not a key inside it: it is
           # runner-written, so it is not an agent-authored outcome extension.
           MANIFEST_JSON=$(jq -c . /tmp/vera_manifest.json 2>/dev/null || echo null)
+          # Pool capacity samples (issue #7059 design C). See the mirrored
+          # comment in the success-callback step above.
+          POOL_CAPACITY_JSON=$(jq -c . /tmp/vera_pool_capacity.json 2>/dev/null || echo null)
           PAYLOAD=$(jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
             --arg error "$ERROR_MSG" \
             --argjson outcome "${OUTCOME_JSON:-null}" \
             --argjson manifest "${MANIFEST_JSON:-null}" \
+            --argjson pool_capacity "${POOL_CAPACITY_JSON:-null}" \
             '{job_id:$job_id, token:$token, status:"failed", error:$error}
              + (if $manifest != null then {manifest:$manifest} else {} end)
+             + (if $pool_capacity != null then {pool_capacity:$pool_capacity} else {} end)
              + (if $outcome != null then {outcome:$outcome} else {} end)')
           # Layer 1+3: a failed callback POST must fail the step (loud, not a
           # warning). On a confirmed 2xx, drop the sentinel that gates the
