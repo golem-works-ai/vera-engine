@@ -64,4 +64,10 @@ Usage probe is tmux plus `/usage`. The weekly bar is used percent. Invert it for
 
 Exception: explicit `--engine opencode --model openrouter/anthropic/…` may still work.
 
-Probe `claude -p /usage` even when `ANTHROPIC_API_KEY` is set.
+Probe Anthropic remaining via a 1-token Haiku `POST /v1/messages` even when `ANTHROPIC_API_KEY` is set.
+
+Use `CLAUDE_CODE_OAUTH_TOKEN` or `~/.claude/.credentials.json`. Do not send the API key.
+
+Hit `https://api.anthropic.com` directly. Do not follow `ANTHROPIC_BASE_URL`.
+
+Parse `anthropic-ratelimit-unified-{5h,7d}-*` headers. Pressure is remaining / (elapsed * 0.9 + 0.05). Report the window with the larger pressure.
