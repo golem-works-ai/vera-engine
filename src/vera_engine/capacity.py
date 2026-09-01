@@ -1,7 +1,8 @@
 """Collect remaining capacity from each provider.
 
 OpenRouter: REST API for credit balance.
-Anthropic (Claude Code): parse ``claude -p "/usage"`` output.
+Anthropic: 1-token Haiku ``POST /v1/messages`` and parse
+``anthropic-ratelimit-unified-{5h,7d}-*`` response headers.
 xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
 ``grok models`` is the fallback when tmux or ``/usage`` cannot produce a percent.
 OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
@@ -16,6 +17,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -42,12 +44,16 @@ class ProviderCapacity:
 
     @property
     def usage_pressure(self) -> float | None:
-        """Return quota-use pressure relative to elapsed subscription time."""
-        if self.token_used_pct is None or self.window_used_pct is None:
+        """Return remaining-quota pressure relative to elapsed window time."""
+        if self.window_used_pct is None:
             return None
-        token_used = self.token_used_pct / 100
-        time_used = self.window_used_pct / 100
-        return token_used / (time_used * 0.7 + 0.25)
+        if self.remaining_pct is not None:
+            remaining_pct = self.remaining_pct
+        elif self.token_used_pct is not None:
+            remaining_pct = 100.0 - self.token_used_pct
+        else:
+            return None
+        return _usage_pressure(remaining_pct, self.window_used_pct)
 
 
 def check_openrouter() -> ProviderCapacity:
@@ -108,76 +114,193 @@ def check_anthropic() -> ProviderCapacity:
     return sub
 
 
-# Confirmed by hand against claude CLI 2.1.222: any of these three takes
-# precedence over the ~/.claude/.credentials.json OAuth login the interactive
-# `claude.ai` session uses, even when the credentials file is valid and the
-# value is a real access token. `/usage` then degrades to a bare cost line
-# with no "subscription" text, so ``_parse_claude_usage`` misreads a live
-# subscription as absent. The pool selector (vera's runner_select.py) sets
-# CLAUDE_CODE_OAUTH_TOKEN on the very same env before ranking each token
-# (see its ``_best_anthropic``), so scrubbing here — not there — is what
-# makes every caller of this probe safe.
-_SHADOWING_ANTHROPIC_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
+# Vera runners set ANTHROPIC_BASE_URL to the internal proxy, which 401s
+# setup-tokens. This probe must hit Anthropic directly.
+_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_HAIKU_PROBE_MODEL = "claude-haiku-4-5-20251001"
+_ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
+_CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+_PRESSURE_SLOPE = 0.9
+_PRESSURE_FLOOR = 0.05
+_ALLOWED_UNIFIED_STATUSES = frozenset({"allowed", "allowed_warning"})
+_UNIFIED_WINDOWS = (
+    ("5h", "session", timedelta(hours=5)),
+    ("7d", "week", timedelta(days=7)),
 )
 
-# A real /usage round trip against Anthropic's backend can run past 15s under
-# load; the old value produced the "claude usage check timed out" verdict on
-# a token that was in fact fine (job 22e19e9f, run 33103804316).
-_CLAUDE_USAGE_TIMEOUT_SECONDS = 45
+
+def _usage_pressure(remaining_pct: float, window_used_pct: float) -> float:
+    """remaining_frac / (elapsed_frac * 0.9 + 0.05). Higher is healthier."""
+    remaining = remaining_pct / 100.0
+    time_used = window_used_pct / 100.0
+    return remaining / (time_used * _PRESSURE_SLOPE + _PRESSURE_FLOOR)
+
+
+def _anthropic_oauth_token() -> str | None:
+    # API keys do not return unified 5h/7d headers. The pool selector ranks
+    # CLAUDE_CODE_OAUTH_TOKEN, so that env var is the credential, not a shadow.
+    env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        data = json.loads(_CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    oauth = data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None
+    token = oauth.get("accessToken")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def _urlopen(req: urllib.request.Request, timeout: float) -> object:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)
+
+
+def _post_anthropic_messages(token: str) -> tuple[int, object]:
+    body = json.dumps(
+        {
+            "model": _HAIKU_PROBE_MODEL,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    ).encode()
+    req = urllib.request.Request(
+        _ANTHROPIC_MESSAGES_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "User-Agent": "vera-engine",
+        },
+    )
+    try:
+        with _urlopen(req, timeout=_ANTHROPIC_PROBE_TIMEOUT_SECONDS) as resp:
+            return int(resp.status), resp.headers
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.headers
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
-    """Parse `claude -p "/usage"` for subscription remaining capacity."""
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in _SHADOWING_ANTHROPIC_ENV_VARS
-    }
+    """Probe Anthropic subscription remaining via unified rate-limit headers."""
+    token = _anthropic_oauth_token()
+    if not token:
+        return ProviderCapacity(
+            "anthropic", available=False, detail="not on subscription"
+        )
     try:
-        result = subprocess.run(
-            ["claude", "-p", "/usage"],
-            capture_output=True,
-            text=True,
-            timeout=_CLAUDE_USAGE_TIMEOUT_SECONDS,
-            env=env,
-        )
-        if result.returncode != 0:
-            logger.info(
-                "claude -p /usage exited %d; stderr=%r",
-                result.returncode,
-                (result.stderr or "")[:200],
-            )
-            return ProviderCapacity(
-                "anthropic", available=False, detail="claude not available"
-            )
-        logger.info("claude -p /usage stdout=%r", result.stdout[:500])
-        return _parse_claude_usage(result.stdout)
-    except FileNotFoundError:
+        status, headers = _post_anthropic_messages(token)
+    except TimeoutError:
         return ProviderCapacity(
-            "anthropic", available=False, detail="claude CLI not found"
-        )
-    except subprocess.TimeoutExpired:
-        return ProviderCapacity(
-            "anthropic", available=False, detail="claude usage check timed out"
+            "anthropic", available=False, detail="anthropic usage check timed out"
         )
     except Exception as exc:
-        logger.warning("Claude usage check failed: %s", exc)
+        logger.warning("Anthropic usage check failed: %s", exc)
         return ProviderCapacity(
             "anthropic", available=False, detail=f"check failed: {exc}"
         )
+    if status in (401, 403):
+        return ProviderCapacity(
+            "anthropic", available=False, detail="not on subscription"
+        )
+    if status not in (200, 429):
+        return ProviderCapacity(
+            "anthropic",
+            available=False,
+            detail=f"anthropic usage check HTTP {status}",
+        )
+    cap = _parse_anthropic_rate_headers(headers)
+    logger.info(
+        "anthropic header probe HTTP %s remaining_pct=%s window=%s",
+        status,
+        cap.remaining_pct,
+        cap.window_name,
+    )
+    return cap
 
 
-_SESSION_PCT_RE = re.compile(r"Current session:\s*(\d+)%\s*used")
-_WEEK_PCT_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used")
-_CLAUDE_SESSION_RESET_RE = re.compile(
-    r"Current session:.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
-)
-_CLAUDE_WEEK_RESET_RE = re.compile(
-    r"Current week \(all models\):.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
-)
+def _header_map(headers: object) -> dict[str, str]:
+    if headers is None:
+        return {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        return {}
+    return {str(key).lower(): str(value) for key, value in items}
+
+
+@dataclass(frozen=True)
+class _UnifiedWindow:
+    window_name: str
+    remaining_pct: float
+    token_used_pct: float
+    window_used_pct: float
+    status: str
+    pressure: float
+
+
+def _parse_anthropic_rate_headers(
+    headers: object, *, now: datetime | None = None
+) -> ProviderCapacity:
+    """Pick the 5h/7d window with larger remaining/time pressure."""
+    mapped = _header_map(headers)
+    current_time = now or datetime.now(UTC)
+    readings: list[_UnifiedWindow] = []
+    for key, window_name, duration in _UNIFIED_WINDOWS:
+        prefix = f"anthropic-ratelimit-unified-{key}"
+        util_raw = mapped.get(f"{prefix}-utilization")
+        reset_raw = mapped.get(f"{prefix}-reset")
+        if util_raw is None or reset_raw is None:
+            continue
+        try:
+            utilization = float(util_raw)
+            reset_epoch = int(float(reset_raw))
+        except ValueError:
+            continue
+        remaining_pct = max(0.0, min(100.0, (1.0 - utilization) * 100.0))
+        reset_at = datetime.fromtimestamp(reset_epoch, tz=UTC)
+        window_used = _window_used_pct(reset_at, duration, current_time)
+        readings.append(
+            _UnifiedWindow(
+                window_name=window_name,
+                remaining_pct=remaining_pct,
+                token_used_pct=utilization * 100.0,
+                window_used_pct=window_used,
+                status=mapped.get(f"{prefix}-status", ""),
+                pressure=_usage_pressure(remaining_pct, window_used),
+            )
+        )
+
+    if not readings:
+        return ProviderCapacity(
+            "anthropic",
+            available=True,
+            detail="subscription active, usage unknown",
+            auth_method="oauth",
+        )
+
+    chosen = max(readings, key=lambda reading: reading.pressure)
+    parts = [
+        f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
+    ]
+    status_ok = (not chosen.status) or chosen.status in _ALLOWED_UNIFIED_STATUSES
+    return ProviderCapacity(
+        "anthropic",
+        available=chosen.remaining_pct > 2 and status_ok,
+        remaining_pct=chosen.remaining_pct,
+        detail=f"{', '.join(parts)} remaining",
+        auth_method="oauth",
+        token_used_pct=chosen.token_used_pct,
+        window_used_pct=chosen.window_used_pct,
+        window_name=chosen.window_name,
+    )
 
 
 def _window_used_pct(reset_at: datetime, duration: timedelta, now: datetime) -> float:
@@ -199,72 +322,6 @@ def _parse_reset(
     if reset_at < now - duration:
         reset_at = reset_at.replace(year=reset_at.year + 1)
     return _window_used_pct(reset_at, duration, now)
-
-
-def _parse_claude_usage(
-    output: str, *, now: datetime | None = None
-) -> ProviderCapacity:
-    if "subscription" not in output.lower():
-        return ProviderCapacity(
-            "anthropic", available=False, detail="not on subscription"
-        )
-
-    session_match = _SESSION_PCT_RE.search(output)
-    week_match = _WEEK_PCT_RE.search(output)
-
-    current_time = now or datetime.now(UTC)
-    session_used = float(session_match.group(1)) if session_match else None
-    week_used = float(week_match.group(1)) if week_match else None
-    session_remaining = 100 - session_used if session_used is not None else None
-    week_remaining = 100 - week_used if week_used is not None else None
-
-    if session_remaining is not None and week_remaining is not None:
-        remaining = min(session_remaining, week_remaining)
-    elif week_remaining is not None:
-        remaining = week_remaining
-    elif session_remaining is not None:
-        remaining = session_remaining
-    else:
-        return ProviderCapacity(
-            "anthropic",
-            available=True,
-            detail="subscription active, usage unknown",
-            auth_method="oauth",
-        )
-
-    parts = []
-    if session_remaining is not None:
-        parts.append(f"session {session_remaining:.0f}%")
-    if week_remaining is not None:
-        parts.append(f"week {week_remaining:.0f}%")
-
-    limiting_window = max(
-        (
-            (session_used, "session", _CLAUDE_SESSION_RESET_RE, timedelta(hours=5)),
-            (week_used, "week", _CLAUDE_WEEK_RESET_RE, timedelta(days=7)),
-        ),
-        key=lambda value: value[0] if value[0] is not None else -1,
-    )
-    token_used, window_name, reset_re, duration = limiting_window
-    reset_match = reset_re.search(output)
-    window_used = (
-        _parse_reset(
-            reset_match.group(1), "%b %d, %I:%M%p", now=current_time, duration=duration
-        )
-        if reset_match is not None
-        else None
-    )
-
-    return ProviderCapacity(
-        "anthropic",
-        available=remaining > 2,
-        remaining_pct=float(remaining),
-        detail=f"{', '.join(parts)} remaining",
-        auth_method="oauth",
-        token_used_pct=token_used,
-        window_used_pct=window_used,
-        window_name=window_name,
-    )
 
 
 def check_openai() -> ProviderCapacity:
