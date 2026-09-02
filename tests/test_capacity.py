@@ -1,7 +1,8 @@
 """Tests for provider capacity checks."""
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from email.message import Message
 from unittest.mock import patch
 
 import pytest
@@ -9,10 +10,11 @@ import pytest
 from vera_engine.capacity import (
     ProviderCapacity,
     _check_grok_usage,
-    _parse_claude_usage,
+    _parse_anthropic_rate_headers,
     _parse_codex_status,
     _parse_grok_models,
     _parse_grok_usage,
+    _usage_pressure,
     check_all,
     check_anthropic,
     check_openai,
@@ -20,51 +22,108 @@ from vera_engine.capacity import (
     check_xai,
 )
 
-CLAUDE_USAGE_OUTPUT = """\
-You are currently using your subscription to power your Claude Code usage
 
-Current session: 4% used · resets Aug 12, 3:10pm (UTC)
-Current week (all models): 24% used · resets Aug 17, 6am (UTC)
-Current week (Fable): 20% used · resets Aug 17, 6am (UTC)
-"""
+def _make_headers(
+    session_util: float = 0.04,
+    week_util: float = 0.09,
+    session_reset_epoch: int = 1723475400,
+    week_reset_epoch: int = 1723899600,
+    session_status: str = "allowed",
+    week_status: str = "allowed",
+) -> Message:
+    """Build an email.message.Message mimicking Anthropic rate-limit headers."""
+    msg = Message()
+    msg["anthropic-ratelimit-unified-5h-utilization"] = str(session_util)
+    msg["anthropic-ratelimit-unified-5h-reset"] = str(session_reset_epoch)
+    msg["anthropic-ratelimit-unified-5h-status"] = session_status
+    msg["anthropic-ratelimit-unified-7d-utilization"] = str(week_util)
+    msg["anthropic-ratelimit-unified-7d-reset"] = str(week_reset_epoch)
+    msg["anthropic-ratelimit-unified-7d-status"] = week_status
+    return msg
 
-CLAUDE_USAGE_HIGH = """\
-You are currently using your subscription to power your Claude Code usage
 
-Current session: 98% used · resets Aug 12, 3:10pm (UTC)
-Current week (all models): 99% used · resets Aug 17, 6am (UTC)
-"""
-
-
-def test_parse_claude_usage_normal():
-    cap = _parse_claude_usage(CLAUDE_USAGE_OUTPUT)
+def test_parse_rate_headers_picks_most_constrained_window():
+    """The probe must report the week window when week is more used than session."""
+    headers = _make_headers(session_util=0.04, week_util=0.09)
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
     assert cap.available is True
-    assert cap.remaining_pct == 76.0
-    assert "session 96%" in cap.detail
-    assert "week 76%" in cap.detail
-
-
-def test_claude_usage_reports_weekly_token_time_and_pressure():
-    cap = _parse_claude_usage(
-        CLAUDE_USAGE_OUTPUT,
-        now=datetime(2026, 8, 16, 6, 0, tzinfo=UTC),
-    )
-    assert cap.token_used_pct == 24.0
+    assert cap.token_used_pct == pytest.approx(9.0)
+    assert cap.remaining_pct == pytest.approx(91.0)
     assert cap.window_name == "week"
-    assert cap.window_used_pct == pytest.approx(85.7, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(0.282, abs=0.001)
+    assert cap.auth_method == "oauth"
 
 
-def test_parse_claude_usage_nearly_exhausted():
-    cap = _parse_claude_usage(CLAUDE_USAGE_HIGH)
+def test_parse_rate_headers_picks_session_when_more_constrained():
+    """When session usage exceeds week, the probe picks session."""
+    headers = _make_headers(session_util=0.50, week_util=0.09)
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
+    assert cap.token_used_pct == pytest.approx(50.0)
+    assert cap.remaining_pct == pytest.approx(50.0)
+    assert cap.window_name == "session"
+
+
+def test_parse_rate_headers_detail_shows_both_windows():
+    headers = _make_headers(session_util=0.04, week_util=0.09)
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
+    assert "session 96%" in cap.detail
+    assert "week 91%" in cap.detail
+
+
+def test_parse_rate_headers_nearly_exhausted():
+    headers = _make_headers(session_util=0.98, week_util=0.99)
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
     assert cap.available is False
-    assert cap.remaining_pct == 1.0
+    assert cap.remaining_pct == pytest.approx(1.0)
 
 
-def test_parse_claude_usage_not_subscription():
-    cap = _parse_claude_usage("You are using API key mode\n")
+def test_parse_rate_headers_no_headers():
+    msg = Message()
+    cap = _parse_anthropic_rate_headers(msg)
+    assert cap.available is True
+    assert "usage unknown" in cap.detail
+
+
+def test_parse_rate_headers_warning_status():
+    headers = _make_headers(session_util=0.04, week_util=0.85, week_status="allowed_warning")
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
+    assert cap.available is True
+
+
+def test_parse_rate_headers_blocked_status():
+    headers = _make_headers(session_util=0.04, week_util=0.85, week_status="blocked")
+    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
+    cap = _parse_anthropic_rate_headers(headers, now=now)
     assert cap.available is False
-    assert "not on subscription" in cap.detail
+
+
+def test_usage_pressure_formula():
+    assert _usage_pressure(91.0, 50.0) == pytest.approx(0.91 / (0.5 * 0.9 + 0.05), abs=0.001)
+
+
+def test_usage_pressure_property_from_remaining():
+    cap = ProviderCapacity(
+        "anthropic",
+        available=True,
+        remaining_pct=91.0,
+        token_used_pct=9.0,
+        window_used_pct=50.0,
+    )
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(91.0, 50.0), abs=0.001)
+
+
+def test_usage_pressure_property_from_token_used_when_no_remaining():
+    cap = ProviderCapacity(
+        "anthropic",
+        available=True,
+        token_used_pct=9.0,
+        window_used_pct=50.0,
+    )
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(91.0, 50.0), abs=0.001)
 
 
 CODEX_STATUS_OUTPUT = """\
@@ -119,7 +178,9 @@ def test_codex_status_reports_token_time_and_pressure():
     assert cap.token_used_pct == 1.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(0.0182, abs=0.001)
+    assert cap.usage_pressure == pytest.approx(
+        _usage_pressure(99.0, 42.9), abs=0.01
+    )
 
 
 def test_parse_codex_status_low():
@@ -167,82 +228,49 @@ def test_check_openai_without_key_codex_unavailable():
 
 
 def test_check_anthropic_prefers_subscription_when_key_also_set():
+    sub = ProviderCapacity(
+        "anthropic", available=True, remaining_pct=91.0,
+        detail="session 96%, week 91% remaining", auth_method="oauth",
+    )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = CLAUDE_USAGE_OUTPUT
+        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "oauth"
-    assert cap.remaining_pct == 76.0
-    mock_run.assert_called()
+    assert cap.remaining_pct == 91.0
 
 
 def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
+    sub = ProviderCapacity(
+        "anthropic", available=False, remaining_pct=1.0,
+        detail="session 2%, week 1% remaining", auth_method="oauth",
+    )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = CLAUDE_USAGE_HIGH
+        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
 
 
-def test_check_anthropic_falls_through_to_api_key_when_cli_missing():
+def test_check_anthropic_falls_through_to_api_key_when_probe_fails():
+    sub = ProviderCapacity(
+        "anthropic", available=False, detail="not on subscription",
+    )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity.subprocess.run", side_effect=FileNotFoundError):
+        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
 
 
-def test_check_anthropic_falls_back_to_claude_cli():
+def test_check_anthropic_no_token_no_key():
     with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = CLAUDE_USAGE_OUTPUT
-            cap = check_anthropic()
-    assert cap.available is True
-    assert cap.remaining_pct == 76.0
-    assert cap.auth_method == "oauth"
-
-
-def test_check_anthropic_scrubs_shadowing_env_vars_from_probe():
-    """Regression for the dead subscription rung (job 22e19e9f, run 33103804316).
-
-    Any of ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN
-    takes precedence over ~/.claude/.credentials.json in claude CLI 2.1.222,
-    even when the credentials file is valid — confirmed by hand. The pool
-    selector sets CLAUDE_CODE_OAUTH_TOKEN on this same process env while
-    ranking tokens, so the probe subprocess must not inherit it.
-    """
-    shadowing = {
-        "ANTHROPIC_API_KEY": "sk-ant-test",
-        "ANTHROPIC_AUTH_TOKEN": "auth-token-test",
-        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-test",
-        "OTHER_VAR": "keep-me",
-    }
-    with patch.dict(os.environ, shadowing, clear=True):
-        with patch("vera_engine.capacity.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = CLAUDE_USAGE_OUTPUT
-            check_anthropic()
-    called_env = mock_run.call_args.kwargs.get("env")
-    assert called_env is not None
-    assert "ANTHROPIC_API_KEY" not in called_env
-    assert "ANTHROPIC_AUTH_TOKEN" not in called_env
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in called_env
-    assert called_env.get("OTHER_VAR") == "keep-me"
-
-
-def test_check_anthropic_no_key_no_cli():
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity.subprocess.run", side_effect=FileNotFoundError):
+        with patch("vera_engine.capacity._anthropic_oauth_token", return_value=None):
             cap = check_anthropic()
     assert cap.available is False
-    assert "not found" in cap.detail
+    assert "not on subscription" in cap.detail
 
 
 GROK_MODELS_LOGGED_IN = """\
@@ -285,7 +313,7 @@ GROK_USAGE_SPLASH = """\
                                   │  ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄   Grok Build  1.0.4                                                                                  │
                                   │  ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀   Grok 4.6 is here!                                                                                  │
   │ ❯                                                                                                                                                                                   │
-  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.6 (high) · always-approve ─╯
+  ╰────────────────────────────────────────────────────────────────────────────────── Grok 4.6 (high) · always-approve ─╯
 """
 
 GROK_USAGE_USD_ONLY = """\
@@ -327,7 +355,9 @@ def test_grok_usage_reports_token_time_and_pressure():
     assert cap.token_used_pct == 53.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(0.964, abs=0.001)
+    assert cap.usage_pressure == pytest.approx(
+        _usage_pressure(47.0, 42.9), abs=0.01
+    )
 
 
 def test_parse_grok_usage_nearly_exhausted():

@@ -64,4 +64,4 @@ Usage probe is tmux plus `/usage`. The weekly bar is used percent. Invert it for
 
 Exception: explicit `--engine opencode --model openrouter/anthropic/…` may still work.
 
-Probe `claude -p /usage` even when `ANTHROPIC_API_KEY` is set.
+Probe Anthropic subscription via 1-token Haiku API call and `anthropic-ratelimit-unified-*` response headers. Prefer subscription over `ANTHROPIC_API_KEY`.

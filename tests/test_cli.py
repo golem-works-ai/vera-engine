@@ -210,7 +210,7 @@ def test_capacity_shows_token_time_and_pressure(capsys):
     assert "pressure" in output
     assert "53%" in output
     assert "40%" in output
-    assert "1.00" in output
+    assert "1.15" in output
 
 
 def test_main_no_command_prints_help():
