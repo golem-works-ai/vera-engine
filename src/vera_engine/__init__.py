@@ -15,7 +15,12 @@ from vera_engine.credentials import (
     SecretRef,
     assert_no_credential_shaped_fields,
 )
-from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+from vera_engine.invocation import (
+    EngineInvocation,
+    EngineUsageReport,
+    MaterializedFile,
+    RunResult,
+)
 from vera_engine.models import (
     CATALOG,
     PROVIDER_CREDENTIALS,
@@ -38,6 +43,7 @@ __all__ = [
     "CredentialGuardError",
     "EngineConfig",
     "EngineInvocation",
+    "EngineUsageReport",
     "MaterializedFile",
     "ModelSpec",
     "RunResult",

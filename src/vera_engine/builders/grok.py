@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder
+from vera_engine.builders.base import EngineBuilder, parse_usage_report_json
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
 DEFAULT_PROMPT_FILENAME = ".vera-engine-grok-prompt.md"
@@ -89,3 +89,18 @@ class GrokBuilder(EngineBuilder):
         if isinstance(sid, str) and sid:
             return sid
         return None
+
+    def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+        """Parse the cost/usage envelope emitted by ``grok --output-format json``.
+
+        Assumes the xAI ``grok`` CLI shares Claude Code's JSON envelope
+        schema -- ``total_cost_usd`` (float), ``usage`` (per-run token
+        counts), and ``modelUsage`` (per-model cost/token breakdown) -- but
+        this has not been verified against real captured
+        ``grok --output-format json`` output (see PR #15 discussion). If a
+        run parses as JSON but yields none of those fields, the shared
+        :func:`parse_usage_report_json` logs a warning so a schema mismatch
+        shows up in logs rather than silently returning an empty report.
+        ``sessionId`` is read separately by :meth:`parse_session_id`.
+        """
+        return parse_usage_report_json(stdout, engine=self.engine_name)

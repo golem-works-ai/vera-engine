@@ -3,7 +3,12 @@
 import pytest
 
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+from vera_engine.invocation import (
+    EngineInvocation,
+    EngineUsageReport,
+    MaterializedFile,
+    RunResult,
+)
 
 
 def test_materialized_file_defaults():
@@ -185,3 +190,61 @@ def test_engine_invocation_resume_stored(tmp_path):
         resume="abc-123",
     )
     assert inv.resume == "abc-123"
+
+
+# --- EngineUsageReport ---
+
+
+def test_engine_usage_report_defaults_to_none():
+    report = EngineUsageReport()
+    assert report.total_cost_usd is None
+    assert report.usage is None
+    assert report.model_usage is None
+
+
+def test_engine_usage_report_stores_fields():
+    report = EngineUsageReport(
+        total_cost_usd=0.0123,
+        usage={"input_tokens": 10, "output_tokens": 5},
+        model_usage={"grok-4.6": {"cost": 0.0123, "tokens": 15}},
+    )
+    assert report.total_cost_usd == 0.0123
+    assert report.usage == {"input_tokens": 10, "output_tokens": 5}
+    assert report.model_usage == {"grok-4.6": {"cost": 0.0123, "tokens": 15}}
+
+
+def test_engine_usage_report_is_frozen():
+    report = EngineUsageReport(total_cost_usd=1.0)
+    with pytest.raises(Exception):
+        report.total_cost_usd = 2.0
+
+
+def test_engine_usage_report_passes_credential_guard():
+    # Construction at import time would have raised via reject_credential_fields;
+    # building an instance confirms the guard accepted the dataclass shape.
+    assert EngineUsageReport() is not None
+
+
+# --- RunResult.usage_report ---
+
+
+def test_run_result_usage_report_defaults_to_none():
+    result = RunResult(
+        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+    )
+    assert result.usage_report is None
+
+
+def test_run_result_usage_report_stored():
+    report = EngineUsageReport(total_cost_usd=0.5)
+    result = RunResult(
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
+        usage_report=report,
+    )
+    assert result.usage_report is report
+    assert result.usage_report.total_cost_usd == 0.5
