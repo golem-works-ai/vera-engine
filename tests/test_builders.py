@@ -5,7 +5,7 @@ import json
 import pytest
 
 from vera_engine.builders.base import EngineBuilder
-from vera_engine.builders.claude_code import ClaudeCodeBuilder, DEFAULT_PROMPT_FILENAME
+from vera_engine.builders.claude_code import DEFAULT_PROMPT_FILENAME, ClaudeCodeBuilder
 from vera_engine.builders.codex import CodexBuilder
 from vera_engine.builders.grok import DEFAULT_PROMPT_FILENAME as GROK_PROMPT_FILENAME
 from vera_engine.builders.grok import GrokBuilder
@@ -52,7 +52,9 @@ def test_claude_code_default_model_is_none():
 
 
 def test_claude_code_env_key_strategy(tmp_path):
-    req = AgentRunRequest(engine="claude-code", prompt="do the thing", workspace=tmp_path)
+    req = AgentRunRequest(
+        engine="claude-code", prompt="do the thing", workspace=tmp_path
+    )
     inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
 
     expected_prompt_path = tmp_path / DEFAULT_PROMPT_FILENAME
@@ -70,7 +72,10 @@ def test_claude_code_env_key_strategy(tmp_path):
 
 def test_claude_code_proxy_strategy(tmp_path):
     req = AgentRunRequest(
-        engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="proxy"
+        engine="claude-code",
+        prompt="x",
+        workspace=tmp_path,
+        credential_strategy="proxy",
     )
     inv = ClaudeCodeBuilder().build_invocation(req, "proxy")
     assert inv.env["ANTHROPIC_API_KEY"] == SecretRef("ANTHROPIC_API_KEY")
@@ -78,7 +83,9 @@ def test_claude_code_proxy_strategy(tmp_path):
 
 
 def test_claude_code_none_strategy_uses_real_home(tmp_path):
-    req = AgentRunRequest(engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="none")
+    req = AgentRunRequest(
+        engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="none"
+    )
     inv = ClaudeCodeBuilder().build_invocation(req, "none")
     assert inv.home_strategy == "real"
     secret_refs = [v for v in inv.env.values() if isinstance(v, SecretRef)]
@@ -193,7 +200,9 @@ def test_opencode_unsupported_strategy_raises(tmp_path):
 
 
 def test_opencode_model_override(tmp_path):
-    req = AgentRunRequest(engine="opencode", prompt="x", workspace=tmp_path, model="custom-model")
+    req = AgentRunRequest(
+        engine="opencode", prompt="x", workspace=tmp_path, model="custom-model"
+    )
     inv = OpenCodeBuilder().build_invocation(req, "env-key")
     assert inv.argv[2] == "custom-model"
 
@@ -261,7 +270,13 @@ def test_codex_env_key_strategy(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="fix the bug", workspace=tmp_path)
     inv = CodexBuilder().build_invocation(req, "env-key")
 
-    assert inv.argv == ("codex", "exec", "-c", "model_reasoning_effort=high", "fix the bug")
+    assert inv.argv == (
+        "codex",
+        "exec",
+        "-c",
+        "model_reasoning_effort=high",
+        "fix the bug",
+    )
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
     assert inv.files == ()
     assert inv.prompt_path is None
@@ -278,7 +293,9 @@ def test_codex_none_strategy_has_no_credentials(tmp_path):
 
 def test_codex_unsupported_strategy_raises(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
-    with pytest.raises(ValueError, match="does not support credential_strategy='proxy'"):
+    with pytest.raises(
+        ValueError, match="does not support credential_strategy='proxy'"
+    ):
         CodexBuilder().build_invocation(req, "proxy")
 
 
@@ -290,16 +307,16 @@ def test_codex_model_override(tmp_path):
 
 
 def test_codex_prompt_is_last_argv_element(tmp_path):
-    req = AgentRunRequest(engine="codex", prompt="the actual prompt", workspace=tmp_path)
+    req = AgentRunRequest(
+        engine="codex", prompt="the actual prompt", workspace=tmp_path
+    )
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert inv.argv[-1] == "the actual prompt"
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
 def test_codex_emits_effort_flag(tmp_path, effort):
-    req = AgentRunRequest(
-        engine="codex", prompt="x", workspace=tmp_path, effort=effort
-    )
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, effort=effort)
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert "-c" in inv.argv
     assert inv.argv[inv.argv.index("-c") + 1] == f"model_reasoning_effort={effort}"
@@ -414,7 +431,9 @@ def test_grok_none_strategy_uses_real_home(tmp_path):
 
 
 def test_grok_model_override(tmp_path):
-    req = AgentRunRequest(engine="grok", prompt="x", workspace=tmp_path, model="grok-4.6")
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, model="grok-4.6"
+    )
     inv = GrokBuilder().build_invocation(req, "env-key")
     assert "-m" in inv.argv
     assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"

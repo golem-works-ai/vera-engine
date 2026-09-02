@@ -1,7 +1,5 @@
 """Tests for EngineInvocation, MaterializedFile, and RunResult."""
 
-from pathlib import Path
-
 import pytest
 
 from vera_engine.credentials import SecretRef
@@ -53,7 +51,11 @@ def test_engine_invocation_valid_construction(tmp_path):
 @pytest.mark.parametrize("strategy", ["hermetic", "shared", "real"])
 def test_engine_invocation_valid_home_strategies(tmp_path, strategy):
     inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy=strategy
+        engine="codex",
+        argv=("codex",),
+        env={},
+        workdir=tmp_path,
+        home_strategy=strategy,
     )
     assert inv.home_strategy == strategy
 
@@ -61,7 +63,11 @@ def test_engine_invocation_valid_home_strategies(tmp_path, strategy):
 def test_engine_invocation_invalid_home_strategy_raises(tmp_path):
     with pytest.raises(ValueError, match="home_strategy must be one of"):
         EngineInvocation(
-            engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy="magic"
+            engine="codex",
+            argv=("codex",),
+            env={},
+            workdir=tmp_path,
+            home_strategy="magic",
         )
 
 
@@ -93,28 +99,48 @@ def test_engine_invocation_is_frozen(tmp_path):
 
 def test_run_result_succeeded_true_on_zero_returncode():
     result = RunResult(
-        returncode=0, stdout="ok", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="ok",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is True
 
 
 def test_run_result_succeeded_false_on_nonzero_returncode():
     result = RunResult(
-        returncode=1, stdout="", stderr="err", timed_out=False, engine="codex", argv=("codex",)
+        returncode=1,
+        stdout="",
+        stderr="err",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is False
 
 
 def test_run_result_succeeded_false_on_timeout_even_with_zero_returncode():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=True, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=True,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is False
 
 
 def test_run_result_is_frozen():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     with pytest.raises(Exception):
         result.returncode = 1
@@ -122,7 +148,12 @@ def test_run_result_is_frozen():
 
 def test_run_result_session_id_defaults_to_none():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.session_id is None
 
@@ -141,9 +172,7 @@ def test_run_result_session_id_stored():
 
 
 def test_engine_invocation_resume_defaults_to_none(tmp_path):
-    inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path
-    )
+    inv = EngineInvocation(engine="codex", argv=("codex",), env={}, workdir=tmp_path)
     assert inv.resume is None
 
 

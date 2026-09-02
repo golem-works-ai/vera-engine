@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from vera_engine.request import AgentRunRequest
 from vera_engine.invocation import EngineInvocation
+from vera_engine.request import AgentRunRequest
 
 
 class EngineBuilder(ABC):

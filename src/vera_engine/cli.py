@@ -16,10 +16,10 @@ from vera_engine.auto_select import (
 from vera_engine.capacity import check_all
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
-from vera_engine.models import Tier, TIER_NAMES, get_catalog
+from vera_engine.models import TIER_NAMES, Tier, get_catalog
+from vera_engine.render.local import ResumeFailedError, render_local
 from vera_engine.request import AgentRunRequest
 from vera_engine.selection import get_builder, list_engines
-from vera_engine.render.local import ResumeFailedError, render_local
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -92,7 +92,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("models", help="List models with effective costs")
 
     # "capacity" subcommand
-    capacity_parser = sub.add_parser("capacity", help="Check remaining capacity per provider")
+    capacity_parser = sub.add_parser(
+        "capacity", help="Check remaining capacity per provider"
+    )
     capacity_parser.add_argument(
         "--refresh",
         action="store_true",
@@ -102,18 +104,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _collect_credentials(invocation: "EngineInvocation") -> CredentialBundle:
+def _collect_credentials(invocation: EngineInvocation) -> CredentialBundle:
     """Collect credentials the invocation actually needs from the environment.
 
     Reads exactly the env vars named by the invocation's SecretRefs.
     Fails fast on any missing one.
     """
-    from vera_engine.invocation import EngineInvocation  # noqa: F811
 
-    required = [
-        v for v in invocation.env.values()
-        if isinstance(v, SecretRef)
-    ]
+    required = [v for v in invocation.env.values() if isinstance(v, SecretRef)]
     values = {}
     missing = []
     for ref in required:
@@ -155,10 +153,14 @@ def _cmd_models(workspace: Path) -> int:
     rows.sort()
 
     print(f"input_weight: {w}")
-    print(f"{'model':<50} {'engine':<14} {'provider':<12} {'tier':<8} {'input':>7} {'output':>8} {'ratio':>6} {'effective':>10}")
+    print(
+        f"{'model':<50} {'engine':<14} {'provider':<12} {'tier':<8} {'input':>7} {'output':>8} {'ratio':>6} {'effective':>10}"
+    )
     print("-" * 119)
     for _, model_id, engine, provider, tier_name, inp, out, ratio, eff in rows:
-        print(f"{model_id:<50} {engine:<14} {provider:<12} {tier_name:<8} {inp:>6.2f} {out:>7.2f} {ratio:>6.3f} {eff:>9.2f}")
+        print(
+            f"{model_id:<50} {engine:<14} {provider:<12} {tier_name:<8} {inp:>6.2f} {out:>7.2f} {ratio:>6.3f} {eff:>9.2f}"
+        )
     return 0
 
 
@@ -170,10 +172,16 @@ def _cmd_capacity(*, refresh: bool = False) -> int:
     )
     for provider, cap in capacities.items():
         status = "ok" if cap.available else "unavailable"
-        remaining = f"{cap.remaining_pct:.0f}%" if cap.remaining_pct is not None else "-"
+        remaining = (
+            f"{cap.remaining_pct:.0f}%" if cap.remaining_pct is not None else "-"
+        )
         tokens = f"{cap.token_used_pct:.0f}%" if cap.token_used_pct is not None else "-"
-        window = f"{cap.window_used_pct:.0f}%" if cap.window_used_pct is not None else "-"
-        pressure = f"{cap.usage_pressure:.2f}" if cap.usage_pressure is not None else "-"
+        window = (
+            f"{cap.window_used_pct:.0f}%" if cap.window_used_pct is not None else "-"
+        )
+        pressure = (
+            f"{cap.usage_pressure:.2f}" if cap.usage_pressure is not None else "-"
+        )
         label = f" {cap.window_name}" if cap.window_name is not None else ""
         print(
             f"{provider:<14} {status:<14} {remaining:>9} {tokens:>8} "
@@ -205,7 +213,10 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve prompt.
     if args.prompt_file:
         if args.prompt:
-            print("error: --prompt and --prompt-file are mutually exclusive", file=sys.stderr)
+            print(
+                "error: --prompt and --prompt-file are mutually exclusive",
+                file=sys.stderr,
+            )
             return 1
         prompt = args.prompt_file.read_text(encoding="utf-8")
     elif args.prompt:
@@ -229,7 +240,10 @@ def main(argv: list[str] | None = None) -> int:
         model = sel.model.model_id
         strategy = sel.strategy
         tier_label = f" tier={sel.model.tier.name}" if tier else ""
-        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})", file=sys.stderr)
+        print(
+            f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})",
+            file=sys.stderr,
+        )
     elif not model and tier is not None:
         # A pinned --engine still participates in cheapest-at-tier when --model is omitted.
         # The old `if not engine and not model` skip spawned Codex default gpt-5.6-terra.
@@ -237,11 +251,17 @@ def main(argv: list[str] | None = None) -> int:
         engine = sel.model.engine
         model = sel.model.model_id
         tier_label = f" tier={sel.model.tier.name}"
-        print(f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})", file=sys.stderr)
+        print(
+            f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})",
+            file=sys.stderr,
+        )
     elif not engine:
         matching = [s for s in get_catalog() if s.model_id == model]
         if not matching:
-            print(f"error: unknown model {model!r} — specify --engine explicitly", file=sys.stderr)
+            print(
+                f"error: unknown model {model!r} — specify --engine explicitly",
+                file=sys.stderr,
+            )
             return 1
         engine = matching[0].engine
 
@@ -276,7 +296,10 @@ def main(argv: list[str] | None = None) -> int:
         print(result.stderr, end="", file=sys.stderr)
 
     if result.timed_out:
-        print(f"\nerror: engine timed out after {request.timeout_seconds}s", file=sys.stderr)
+        print(
+            f"\nerror: engine timed out after {request.timeout_seconds}s",
+            file=sys.stderr,
+        )
         return 124
 
     return result.returncode

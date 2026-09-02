@@ -1,7 +1,7 @@
 """Tests for provider capacity checks."""
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email.message import Message
 from unittest.mock import patch
 
@@ -18,7 +18,6 @@ from vera_engine.capacity import (
     check_all,
     check_anthropic,
     check_openai,
-    check_openrouter,
     check_xai,
 )
 
@@ -88,7 +87,9 @@ def test_parse_rate_headers_no_headers():
 
 
 def test_parse_rate_headers_warning_status():
-    headers = _make_headers(session_util=0.04, week_util=0.85, week_status="allowed_warning")
+    headers = _make_headers(
+        session_util=0.04, week_util=0.85, week_status="allowed_warning"
+    )
     now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
     cap = _parse_anthropic_rate_headers(headers, now=now)
     assert cap.available is True
@@ -102,7 +103,9 @@ def test_parse_rate_headers_blocked_status():
 
 
 def test_usage_pressure_formula():
-    assert _usage_pressure(91.0, 50.0) == pytest.approx(0.91 / (0.5 * 0.9 + 0.05), abs=0.001)
+    assert _usage_pressure(91.0, 50.0) == pytest.approx(
+        0.91 / (0.5 * 0.9 + 0.05), abs=0.001
+    )
 
 
 def test_usage_pressure_property_from_remaining():
@@ -178,9 +181,7 @@ def test_codex_status_reports_token_time_and_pressure():
     assert cap.token_used_pct == 1.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(
-        _usage_pressure(99.0, 42.9), abs=0.01
-    )
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(99.0, 42.9), abs=0.01)
 
 
 def test_parse_codex_status_low():
@@ -211,8 +212,11 @@ def test_check_openai_without_key_falls_back_to_codex():
     with patch.dict(os.environ, {}, clear=True):
         with patch("vera_engine.capacity._check_codex_status") as mock_cs:
             mock_cs.return_value = ProviderCapacity(
-                "openai", available=True, remaining_pct=99.0,
-                detail="codex Plus: 99% weekly left", auth_method="oauth",
+                "openai",
+                available=True,
+                remaining_pct=99.0,
+                detail="codex Plus: 99% weekly left",
+                auth_method="oauth",
             )
             cap = check_openai()
     assert cap.available is True
@@ -229,11 +233,16 @@ def test_check_openai_without_key_codex_unavailable():
 
 def test_check_anthropic_prefers_subscription_when_key_also_set():
     sub = ProviderCapacity(
-        "anthropic", available=True, remaining_pct=91.0,
-        detail="session 96%, week 91% remaining", auth_method="oauth",
+        "anthropic",
+        available=True,
+        remaining_pct=91.0,
+        detail="session 96%, week 91% remaining",
+        auth_method="oauth",
     )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
+        with patch(
+            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
+        ):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "oauth"
@@ -242,11 +251,16 @@ def test_check_anthropic_prefers_subscription_when_key_also_set():
 
 def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
     sub = ProviderCapacity(
-        "anthropic", available=False, remaining_pct=1.0,
-        detail="session 2%, week 1% remaining", auth_method="oauth",
+        "anthropic",
+        available=False,
+        remaining_pct=1.0,
+        detail="session 2%, week 1% remaining",
+        auth_method="oauth",
     )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
+        with patch(
+            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
+        ):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
@@ -255,10 +269,14 @@ def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
 
 def test_check_anthropic_falls_through_to_api_key_when_probe_fails():
     sub = ProviderCapacity(
-        "anthropic", available=False, detail="not on subscription",
+        "anthropic",
+        available=False,
+        detail="not on subscription",
     )
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub):
+        with patch(
+            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
+        ):
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
@@ -355,9 +373,7 @@ def test_grok_usage_reports_token_time_and_pressure():
     assert cap.token_used_pct == 53.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(
-        _usage_pressure(47.0, 42.9), abs=0.01
-    )
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(47.0, 42.9), abs=0.01)
 
 
 def test_parse_grok_usage_nearly_exhausted():
@@ -480,7 +496,9 @@ def test_check_grok_usage_strips_api_key_and_uses_dedicated_session():
                 mock_run.return_value.stderr = ""
                 assert _check_grok_usage() is None
     new_sess = next(
-        c for c in mock_run.call_args_list if c.args and c.args[0][:2] == ["tmux", "new-session"]
+        c
+        for c in mock_run.call_args_list
+        if c.args and c.args[0][:2] == ["tmux", "new-session"]
     )
     argv = new_sess.args[0]
     assert "vera-engine-grok-usage" in argv
@@ -492,7 +510,9 @@ def test_check_grok_usage_strips_api_key_and_uses_dedicated_session():
 
 
 def test_check_all_includes_xai(tmp_path, monkeypatch):
-    monkeypatch.setattr("vera_engine.capacity._CAPACITY_CACHE_PATH", tmp_path / "capacity.json")
+    monkeypatch.setattr(
+        "vera_engine.capacity._CAPACITY_CACHE_PATH", tmp_path / "capacity.json"
+    )
     fake = ProviderCapacity("xai", available=False, detail="stub")
     with patch("vera_engine.capacity.check_anthropic", return_value=fake):
         with patch("vera_engine.capacity.check_openrouter", return_value=fake):

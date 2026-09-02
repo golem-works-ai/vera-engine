@@ -46,7 +46,9 @@ def test_valid_efforts(tmp_path, effort):
 
 def test_invalid_effort_raises(tmp_path):
     with pytest.raises(ValueError, match="effort must be one of"):
-        AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, effort="extreme")
+        AgentRunRequest(
+            engine="codex", prompt="x", workspace=tmp_path, effort="extreme"
+        )
 
 
 @pytest.mark.parametrize("strategy", ["env-key", "proxy", "none"])
@@ -96,12 +98,16 @@ def test_empty_prompt_raises(tmp_path):
 
 def test_negative_timeout_raises(tmp_path):
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
-        AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, timeout_seconds=-1)
+        AgentRunRequest(
+            engine="codex", prompt="x", workspace=tmp_path, timeout_seconds=-1
+        )
 
 
 def test_zero_timeout_raises(tmp_path):
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
-        AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, timeout_seconds=0)
+        AgentRunRequest(
+            engine="codex", prompt="x", workspace=tmp_path, timeout_seconds=0
+        )
 
 
 def test_frozen_dataclass_is_immutable(tmp_path):

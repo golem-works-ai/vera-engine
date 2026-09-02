@@ -98,6 +98,7 @@ def _is_strategy_label(cls: type, name: str) -> bool:
     if str in members:
         return True
     from enum import StrEnum
+
     return all(
         m is type(None) or (isinstance(m, type) and issubclass(m, StrEnum))
         for m in members
@@ -118,9 +119,11 @@ def assert_no_credential_shaped_fields(
     for f in fields(cls):
         if _is_strategy_label(cls, f.name):
             continue
-        if FORBIDDEN_FIELD_PATTERN.search(f.name):
-            leaky.append(f.name)
-        elif extra_pattern and extra_pattern.search(f.name):
+        if (
+            FORBIDDEN_FIELD_PATTERN.search(f.name)
+            or extra_pattern
+            and extra_pattern.search(f.name)
+        ):
             leaky.append(f.name)
     if leaky:
         msg = (

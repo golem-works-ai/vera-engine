@@ -6,14 +6,13 @@ from enum import StrEnum
 import pytest
 
 from vera_engine.credentials import (
+    FORBIDDEN_FIELD_PATTERN,
     CredentialBundle,
     CredentialGuardError,
-    FORBIDDEN_FIELD_PATTERN,
     SecretRef,
     assert_no_credential_shaped_fields,
     reject_credential_fields,
 )
-
 
 # ── SecretRef ────────────────────────────────────────────────────────────────
 
@@ -83,6 +82,7 @@ def test_credential_bundle_resolve_missing_is_not_keyerror():
 
 def test_credential_bundle_accepts_mapping():
     from collections.abc import Mapping
+
     mapping: Mapping[str, str] = {"A": "1", "B": "2"}
     bundle = CredentialBundle(values=mapping)
     assert bundle.resolve(SecretRef("A")) == "1"
@@ -109,18 +109,37 @@ def test_credential_bundle_repr_sorted_keys():
 # ── FORBIDDEN_FIELD_PATTERN ──────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", [
-    "api_key", "api-key", "apikey", "API_KEY",
-    "oauth", "secret", "credential", "password", "passwd",
-    "my_api_key_value", "availability", "entitlement",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "api_key",
+        "api-key",
+        "apikey",
+        "API_KEY",
+        "oauth",
+        "secret",
+        "credential",
+        "password",
+        "passwd",
+        "my_api_key_value",
+        "availability",
+        "entitlement",
+    ],
+)
 def test_forbidden_pattern_matches_credential_shapes(name):
     assert FORBIDDEN_FIELD_PATTERN.search(name), f"{name!r} should match"
 
 
-@pytest.mark.parametrize("name", [
-    "model", "engine", "prompt", "workspace", "private_key",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "model",
+        "engine",
+        "prompt",
+        "workspace",
+        "private_key",
+    ],
+)
 def test_forbidden_pattern_ignores_safe_names(name):
     assert not FORBIDDEN_FIELD_PATTERN.search(name), f"{name!r} should not match"
 
@@ -179,6 +198,7 @@ def test_guard_allows_credential_strategy_strenum():
 
 def test_guard_extra_pattern():
     import re
+
     extra = re.compile(r"(bearer|cookie)", re.IGNORECASE)
 
     @dataclass

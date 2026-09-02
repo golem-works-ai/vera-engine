@@ -16,7 +16,6 @@ from vera_engine.render.local import (
     render_local,
 )
 
-
 # --- _resolve_env ---
 
 
@@ -77,7 +76,11 @@ def test_expand_vars_unresolved_reference_raises():
 
 def _inv(tmp_path, home_strategy="hermetic"):
     return EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy=home_strategy
+        engine="codex",
+        argv=("codex",),
+        env={},
+        workdir=tmp_path,
+        home_strategy=home_strategy,
     )
 
 
@@ -187,7 +190,9 @@ def test_materialize_files_literal_dollar_when_expansion_off(tmp_path):
 
 
 def test_materialize_files_applies_mode(tmp_path):
-    files = (MaterializedFile(relative_path="script.sh", content="#!/bin/sh", mode=0o755),)
+    files = (
+        MaterializedFile(relative_path="script.sh", content="#!/bin/sh", mode=0o755),
+    )
     _materialize_files(files, tmp_path, {})
     assert (tmp_path / "script.sh").stat().st_mode & 0o777 == 0o755
 
@@ -229,7 +234,11 @@ def test_render_local_echo_success(tmp_path):
 
 def test_render_local_nonzero_exit(tmp_path):
     inv = EngineInvocation(
-        engine="false", argv=("false",), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="false",
+        argv=("false",),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode != 0
@@ -308,7 +317,11 @@ def test_render_local_shared_home_strategy_removed_after_run(tmp_path):
     # into the result; existence of the created HOME dir isn't directly observable
     # here, so this exercises the shared-strategy code path end to end.
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="shared"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="shared",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode == 0
@@ -343,7 +356,11 @@ def test_render_local_parses_session_id_via_builder(tmp_path):
 
 def test_render_local_no_builder_leaves_session_id_none(tmp_path):
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.session_id is None
@@ -394,7 +411,11 @@ def test_render_local_resume_success_returns_session_id(tmp_path):
 
 def test_render_local_nonzero_without_resume_does_not_raise(tmp_path):
     inv = EngineInvocation(
-        engine="false", argv=("false",), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="false",
+        argv=("false",),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode != 0

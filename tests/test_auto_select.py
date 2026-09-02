@@ -11,10 +11,10 @@ from vera_engine.auto_select import (
     _usable_providers,
     qualifying_models,
     resolve_request,
-    selection_cost,
-    selection_cost_ratio,
     select_cheapest,
     select_model,
+    selection_cost,
+    selection_cost_ratio,
 )
 from vera_engine.capacity import ProviderCapacity
 from vera_engine.config import EngineConfig
@@ -101,11 +101,15 @@ def _openrouter_low():
 
 
 def _is_opencode_anthropic(spec: ModelSpec) -> bool:
-    return spec.engine == "opencode" and spec.model_id.startswith("openrouter/anthropic/")
+    return spec.engine == "opencode" and spec.model_id.startswith(
+        "openrouter/anthropic/"
+    )
 
 
 def test_selects_cheapest_with_all_healthy():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     capacities = _all_healthy()
     with patch("vera_engine.auto_select.check_all", return_value=capacities):
         sel = select_model(config)
@@ -118,7 +122,9 @@ def test_selects_cheapest_with_all_healthy():
 
 
 def test_subscription_ratio_changes_winner():
-    config = EngineConfig(provider_ratios={"anthropic": 0.01, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 0.01, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         sel = select_model(config)
     assert sel.model.provider == "anthropic"
@@ -162,7 +168,9 @@ def test_raises_when_none_available():
 
 def test_only_anthropic_available():
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_only_anthropic_oauth()):
+    with patch(
+        "vera_engine.auto_select.check_all", return_value=_only_anthropic_oauth()
+    ):
         sel = select_model(config)
     assert sel.model.provider == "anthropic"
 
@@ -175,7 +183,9 @@ def test_only_openrouter_available():
 
 
 def test_skips_low_capacity_provider():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 0.01, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 0.01, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_openrouter_low()):
         sel = select_model(config)
     assert sel.model.provider != "openrouter"
@@ -183,14 +193,18 @@ def test_skips_low_capacity_provider():
 
 def test_oauth_provider_gets_none_strategy():
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_only_anthropic_oauth()):
+    with patch(
+        "vera_engine.auto_select.check_all", return_value=_only_anthropic_oauth()
+    ):
         sel = select_model(config)
     assert sel.strategy == "none"
 
 
 def test_api_key_provider_gets_env_key_strategy():
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_only_anthropic_api_key()):
+    with patch(
+        "vera_engine.auto_select.check_all", return_value=_only_anthropic_api_key()
+    ):
         sel = select_model(config)
     assert sel.strategy == "env-key"
 
@@ -225,7 +239,9 @@ def test_usable_providers_filters_low_usd():
 
 
 def test_tier_stone_excludes_clay():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         sel = select_model(config, tier=Tier.stone)
     assert sel.model.tier >= Tier.stone
@@ -326,7 +342,9 @@ def test_explicit_provider_ratio_overrides_oauth_subscription_default():
 
 
 def test_tier_iron_selects_fable():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         sel = select_model(config, tier=Tier.iron)
     assert sel.model.tier >= Tier.iron
@@ -334,7 +352,9 @@ def test_tier_iron_selects_fable():
 
 
 def test_tier_none_includes_all():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     capacities = _all_healthy()
     with patch("vera_engine.auto_select.check_all", return_value=capacities):
         sel = select_model(config, tier=None)
@@ -350,7 +370,9 @@ def test_tier_none_includes_all():
 
 
 def test_exclude_skips_blacklisted_model():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         first = select_model(config)
         second = select_model(config, exclude={first.model.model_id})
@@ -359,6 +381,7 @@ def test_exclude_skips_blacklisted_model():
 
 def test_exclude_all_raises():
     from vera_engine.models import get_catalog
+
     all_ids = {s.model_id for s in get_catalog()}
     config = EngineConfig(provider_ratios={})
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
@@ -367,7 +390,9 @@ def test_exclude_all_raises():
 
 
 def test_exclude_with_tier_picks_next_at_tier():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         first = select_model(config, tier=Tier.stone)
         second = select_model(config, tier=Tier.stone, exclude={first.model.model_id})
@@ -376,7 +401,9 @@ def test_exclude_with_tier_picks_next_at_tier():
 
 
 def test_exclude_empty_set_is_noop():
-    config = EngineConfig(provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0})
+    config = EngineConfig(
+        provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
+    )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         without = select_model(config)
         with_empty = select_model(config, exclude=set())
@@ -531,7 +558,9 @@ def test_resolve_request_fills_engine_and_model_from_tier(tmp_path):
 
 
 def test_resolve_request_honors_pinned_engine(tmp_path):
-    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, tier=Tier.clay)
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, tier=Tier.clay
+    )
     resolved = resolve_request(req, _uniform_config(), probe=False)
     assert resolved.engine == "codex"
     assert resolved.model
@@ -579,7 +608,9 @@ def test_resolve_request_probe_true_forwards_engines(tmp_path, monkeypatch):
 
 def test_resolve_request_probe_false_forwards_engines(tmp_path):
     req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay)
-    resolved = resolve_request(req, _uniform_config(), probe=False, engines={"opencode"})
+    resolved = resolve_request(
+        req, _uniform_config(), probe=False, engines={"opencode"}
+    )
     assert resolved.engine in {"opencode"}
 
 
