@@ -2,7 +2,14 @@
 
 import pytest
 
-from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, Tier, TIER_NAMES, get_catalog
+from vera_engine.models import (
+    CATALOG,
+    PROVIDER_CREDENTIALS,
+    TIER_NAMES,
+    ModelSpec,
+    Tier,
+    get_catalog,
+)
 
 
 def test_model_spec_blended_cost():
@@ -44,7 +51,9 @@ def test_get_catalog_returns_specs():
 def test_all_catalog_providers_have_credentials():
     providers = {s.provider for s in CATALOG}
     for p in providers:
-        assert p in PROVIDER_CREDENTIALS, f"provider {p!r} missing from PROVIDER_CREDENTIALS"
+        assert p in PROVIDER_CREDENTIALS, (
+            f"provider {p!r} missing from PROVIDER_CREDENTIALS"
+        )
 
 
 def test_all_catalog_costs_positive():

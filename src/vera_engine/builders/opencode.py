@@ -41,9 +41,7 @@ class OpenCodeBuilder(EngineBuilder):
 
         env: dict[str, str | SecretRef] = {}
 
-        if strategy == "env-key":
-            env["OPENROUTER_API_KEY"] = SecretRef("OPENROUTER_API_KEY")
-        elif strategy == "proxy":
+        if strategy == "env-key" or strategy == "proxy":
             env["OPENROUTER_API_KEY"] = SecretRef("OPENROUTER_API_KEY")
 
         files: list[MaterializedFile] = []

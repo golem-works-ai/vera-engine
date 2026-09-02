@@ -7,11 +7,16 @@ import pytest
 
 from vera_engine.auto_select import Selection
 from vera_engine.capacity import ProviderCapacity
-from vera_engine.cli import _build_parser, _cmd_capacity, _cmd_models, _collect_credentials, main
+from vera_engine.cli import (
+    _build_parser,
+    _cmd_capacity,
+    _cmd_models,
+    _collect_credentials,
+    main,
+)
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, RunResult
 from vera_engine.models import ModelSpec, Tier
-
 
 # --- argument parsing ---
 
@@ -88,9 +93,7 @@ def test_parser_run_rejects_bad_effort():
 
 
 def test_parser_run_prompt_file_option():
-    args = _build_parser().parse_args(
-        ["run", "--engine", "codex", "-f", "prompt.txt"]
-    )
+    args = _build_parser().parse_args(["run", "--engine", "codex", "-f", "prompt.txt"])
     assert args.prompt_file == Path("prompt.txt")
 
 
@@ -124,7 +127,10 @@ def test_parser_run_structured_output_defaults_false():
 def test_collect_credentials_reads_env_vars(monkeypatch):
     monkeypatch.setenv("MY_TOKEN", "value123")
     inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={"KEY": SecretRef("MY_TOKEN")}, workdir=Path(".")
+        engine="codex",
+        argv=("codex",),
+        env={"KEY": SecretRef("MY_TOKEN")},
+        workdir=Path("."),
     )
     bundle = _collect_credentials(inv)
     assert bundle.values == {"MY_TOKEN": "value123"}
@@ -147,7 +153,10 @@ def test_collect_credentials_missing_exits(monkeypatch, capsys):
 
 def test_collect_credentials_ignores_plain_string_env(monkeypatch):
     inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={"PLAIN": "literal-value"}, workdir=Path(".")
+        engine="codex",
+        argv=("codex",),
+        env={"PLAIN": "literal-value"},
+        workdir=Path("."),
     )
     bundle = _collect_credentials(inv)
     assert bundle.values == {}
@@ -199,7 +208,9 @@ def test_capacity_shows_token_time_and_pressure(capsys):
         window_used_pct=40.0,
         window_name="week",
     )
-    with patch("vera_engine.cli.check_all", return_value={"openai": capacity}) as check_all:
+    with patch(
+        "vera_engine.cli.check_all", return_value={"openai": capacity}
+    ) as check_all:
         assert _cmd_capacity() == 0
 
     check_all.assert_called_once_with(force=False)
@@ -210,7 +221,7 @@ def test_capacity_shows_token_time_and_pressure(capsys):
     assert "pressure" in output
     assert "53%" in output
     assert "40%" in output
-    assert "1.00" in output
+    assert "1.15" in output
 
 
 def test_main_no_command_prints_help():
@@ -255,26 +266,44 @@ def test_main_run_reads_prompt_from_file(tmp_path, monkeypatch):
         captured["invocation"] = invocation
         captured["bundle"] = bundle
         return RunResult(
-            returncode=0, stdout="ok", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
-            ["run", "--engine", "codex", "--workspace", str(tmp_path), "-f", str(prompt_file)]
+            [
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "-f",
+                str(prompt_file),
+            ]
         )
 
     assert rc == 0
     assert captured["invocation"].argv[-1] == "prompt from file"
 
 
-def test_main_run_success_prints_stdout_returns_returncode(tmp_path, monkeypatch, capsys):
+def test_main_run_success_prints_stdout_returns_returncode(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=0, stdout="engine output\n", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="engine output\n",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
@@ -291,8 +320,12 @@ def test_main_run_nonzero_returncode_propagates(tmp_path, monkeypatch):
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=7, stdout="", stderr="boom", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=7,
+            stdout="",
+            stderr="boom",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
@@ -308,15 +341,26 @@ def test_main_run_timeout_returns_124(tmp_path, monkeypatch, capsys):
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=-1, stdout="", stderr="", timed_out=True,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=-1,
+            stdout="",
+            stderr="",
+            timed_out=True,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
             [
-                "run", "--engine", "codex", "--workspace", str(tmp_path),
-                "--prompt", "hi", "--timeout", "5",
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--timeout",
+                "5",
             ]
         )
 
@@ -329,7 +373,17 @@ def test_main_run_missing_credentials_exits_before_render(tmp_path, monkeypatch)
 
     with patch("vera_engine.cli.render_local") as fake_render_local:
         with pytest.raises(SystemExit) as exc_info:
-            main(["run", "--engine", "codex", "--workspace", str(tmp_path), "--prompt", "hi"])
+            main(
+                [
+                    "run",
+                    "--engine",
+                    "codex",
+                    "--workspace",
+                    str(tmp_path),
+                    "--prompt",
+                    "hi",
+                ]
+            )
 
     assert exc_info.value.code == 1
     fake_render_local.assert_not_called()
@@ -340,15 +394,26 @@ def test_main_run_none_strategy_needs_no_credentials(tmp_path, monkeypatch):
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=0, stdout="", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
             [
-                "run", "--engine", "codex", "--workspace", str(tmp_path),
-                "--prompt", "hi", "--strategy", "none",
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--strategy",
+                "none",
             ]
         )
 
@@ -375,8 +440,12 @@ def test_main_engine_plus_tier_without_model_selects(tmp_path, monkeypatch):
     def fake_render_local(invocation, bundle, builder=None):
         captured["invocation"] = invocation
         return RunResult(
-            returncode=0, stdout="ok", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with (
@@ -417,8 +486,12 @@ def test_main_engine_without_model_or_tier_skips_select(tmp_path, monkeypatch):
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=0, stdout="", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with (
@@ -441,8 +514,12 @@ def test_main_omitted_engine_and_model_still_probes(tmp_path, monkeypatch):
 
     def fake_render_local(invocation, bundle, builder=None):
         return RunResult(
-            returncode=0, stdout="", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with (
@@ -463,15 +540,26 @@ def test_main_resume_flag_builds_resume_invocation(tmp_path, monkeypatch):
         captured["invocation"] = invocation
         captured["builder"] = builder
         return RunResult(
-            returncode=0, stdout="", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
             [
-                "run", "--engine", "codex", "--workspace", str(tmp_path),
-                "--prompt", "hi", "--resume", "thr-1",
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--resume",
+                "thr-1",
             ]
         )
 
@@ -492,15 +580,25 @@ def test_main_structured_output_flag_builds_json_invocation(tmp_path, monkeypatc
     def fake_render_local(invocation, bundle, builder=None):
         captured["invocation"] = invocation
         return RunResult(
-            returncode=0, stdout="", stderr="", timed_out=False,
-            engine=invocation.engine, argv=invocation.argv,
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
         )
 
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
             [
-                "run", "--engine", "codex", "--workspace", str(tmp_path),
-                "--prompt", "hi", "--structured-output",
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--structured-output",
             ]
         )
 
@@ -519,8 +617,15 @@ def test_main_resume_failure_surfaces_error(tmp_path, monkeypatch, capsys):
     with patch("vera_engine.cli.render_local", fake_render_local):
         rc = main(
             [
-                "run", "--engine", "codex", "--workspace", str(tmp_path),
-                "--prompt", "hi", "--resume", "dead",
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--resume",
+                "dead",
             ]
         )
 

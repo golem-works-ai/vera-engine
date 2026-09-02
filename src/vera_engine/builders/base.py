@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 
-from vera_engine.request import AgentRunRequest
 from vera_engine.invocation import EngineInvocation, EngineUsageReport
+from vera_engine.request import AgentRunRequest
 
 
 def parse_usage_report_json(stdout: str) -> EngineUsageReport | None:

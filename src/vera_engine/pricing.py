@@ -54,7 +54,9 @@ def fetch_openrouter_pricing() -> dict[str, dict[str, float]]:
     return _parse_models(payload)
 
 
-def get_openrouter_pricing(*, force: bool = False) -> dict[str, dict[str, float]] | None:
+def get_openrouter_pricing(
+    *, force: bool = False
+) -> dict[str, dict[str, float]] | None:
     """Return cached pricing, refreshing if stale. None if never fetched."""
     global _cache, _cache_expires_at
     now = time.monotonic()

@@ -30,9 +30,7 @@ class ResumeFailedError(RuntimeError):
     exit, it was killed.
     """
 
-    def __init__(
-        self, resume: str, returncode: int, engine: str, stderr: str
-    ) -> None:
+    def __init__(self, resume: str, returncode: int, engine: str, stderr: str) -> None:
         self.resume = resume
         self.returncode = returncode
         self.engine = engine
@@ -62,6 +60,7 @@ _REFERENCE_RE = re.compile(r"\$(?:\{(?P<braced>\w+)\}|(?P<bare>\w+))")
 
 def _expand_vars(text: str, env: dict[str, str]) -> str:
     """Expand $NAME and ${NAME} references. Fails fast on unresolved ones."""
+
     def _replace(match: re.Match[str]) -> str:
         name = match.group("braced") or match.group("bare")
         try:
@@ -71,6 +70,7 @@ def _expand_vars(text: str, env: dict[str, str]) -> str:
                 f"unresolved reference ${name} in materialized file "
                 f"(available: {sorted(env)})"
             ) from None
+
     return _REFERENCE_RE.sub(_replace, text)
 
 
