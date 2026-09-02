@@ -1,4 +1,4 @@
-# vera-template-version: 2026.08.27.2
+# vera-template-version: 2026.08.31.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -82,6 +82,15 @@ jobs:
           # attempts can push to a pre-existing vera/<N>-<slug> branch without
           # a spurious "unrelated history" rejection (issue #2915).
           fetch-depth: 0
+
+      # callback_token is a workflow_dispatch input, not a secret, so Actions
+      # does not auto-mask it. It authenticates the credential-exchange call
+      # that delivers the .secrets bucket, so it can't move into that bucket
+      # itself (chicken-and-egg) — mask it explicitly before any step logs it
+      # via a step-level env: dump (issue #7134).
+      - name: Mask callback token
+        run: |
+          echo "::add-mask::${{ inputs.callback_token }}"
 
       - name: Fetch job package
         env:
