@@ -683,3 +683,23 @@ def test_grok_parse_usage_report_absent_cost_yields_none():
     assert report is not None
     assert report.total_cost_usd is None
     assert report.usage == {"input_tokens": 1}
+
+
+def test_grok_parse_usage_report_warns_on_all_fields_absent(caplog):
+    # A JSON dict with none of total_cost_usd/usage/modelUsage is exactly what
+    # a grok --output-format json schema mismatch would look like: the report
+    # still returns (all-None), but a warning surfaces the mismatch instead of
+    # failing silently.
+    with caplog.at_level("WARNING", logger="vera_engine.builders.base"):
+        report = GrokBuilder().parse_usage_report('{"unrelated": true}')
+    assert report is not None
+    assert report.total_cost_usd is None
+    assert report.usage is None
+    assert report.model_usage is None
+    assert any("grok" in record.getMessage() for record in caplog.records)
+
+
+def test_claude_code_parse_usage_report_no_warning_when_fields_present(caplog):
+    with caplog.at_level("WARNING", logger="vera_engine.builders.base"):
+        ClaudeCodeBuilder().parse_usage_report(_claude_usage_stdout())
+    assert caplog.records == []

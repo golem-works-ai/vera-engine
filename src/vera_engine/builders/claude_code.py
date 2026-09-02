@@ -107,4 +107,4 @@ class ClaudeCodeBuilder(EngineBuilder):
         read separately by :meth:`parse_session_id`. Delegates to the shared
         :func:`parse_usage_report_json` so the parsing stays in one place.
         """
-        return parse_usage_report_json(stdout)
+        return parse_usage_report_json(stdout, engine=self.engine_name)

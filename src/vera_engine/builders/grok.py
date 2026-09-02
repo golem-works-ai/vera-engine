@@ -93,11 +93,14 @@ class GrokBuilder(EngineBuilder):
     def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
         """Parse the cost/usage envelope emitted by ``grok --output-format json``.
 
-        Field names follow the xAI ``grok`` CLI JSON envelope schema: the
-        top-level object carries ``total_cost_usd`` (float), ``usage``
-        (per-run token counts), and ``modelUsage`` (per-model cost/token
-        breakdown). ``sessionId`` is read separately by
-        :meth:`parse_session_id`. Delegates to the shared
-        :func:`parse_usage_report_json` so the parsing stays in one place.
+        Assumes the xAI ``grok`` CLI shares Claude Code's JSON envelope
+        schema -- ``total_cost_usd`` (float), ``usage`` (per-run token
+        counts), and ``modelUsage`` (per-model cost/token breakdown) -- but
+        this has not been verified against real captured
+        ``grok --output-format json`` output (see PR #15 discussion). If a
+        run parses as JSON but yields none of those fields, the shared
+        :func:`parse_usage_report_json` logs a warning so a schema mismatch
+        shows up in logs rather than silently returning an empty report.
+        ``sessionId`` is read separately by :meth:`parse_session_id`.
         """
-        return parse_usage_report_json(stdout)
+        return parse_usage_report_json(stdout, engine=self.engine_name)

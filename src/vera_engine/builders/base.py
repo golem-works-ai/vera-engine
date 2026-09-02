@@ -3,29 +3,40 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 
 from vera_engine.invocation import EngineInvocation, EngineUsageReport
 from vera_engine.request import AgentRunRequest
 
+logger = logging.getLogger(__name__)
 
-def parse_usage_report_json(stdout: str) -> EngineUsageReport | None:
+
+def parse_usage_report_json(
+    stdout: str, *, engine: str = "unknown"
+) -> EngineUsageReport | None:
     """Parse the shared cost/usage envelope emitted by CLIs in JSON mode.
 
-    Both the ``claude`` (Claude Code) and ``grok`` (xAI) CLIs emit the same
-    field names under ``--output-format json`` -- ``total_cost_usd``,
-    ``usage``, and ``modelUsage`` -- so the parsing lives here once and both
-    builders delegate to it to avoid copy drift. The session-id key differs
-    in casing between the two CLIs (``session_id`` vs ``sessionId``) and is
-    read separately by each builder's :meth:`parse_session_id`.
+    The ``claude`` (Claude Code) CLI's ``--output-format json`` envelope is
+    confirmed to expose ``total_cost_usd``, ``usage``, and ``modelUsage``.
+    The ``grok`` (xAI) CLI is *assumed* to share this schema, but that
+    assumption is unverified against real ``grok --output-format json``
+    output -- see PR #15 discussion. The parsing lives here once so both
+    builders delegate to it and avoid copy drift, but callers should not
+    treat a clean parse from grok as schema-confirmed. The session-id key
+    differs in casing between the two CLIs (``session_id`` vs
+    ``sessionId``) and is read separately by each builder's
+    :meth:`parse_session_id`.
 
     Returns None on non-JSON or non-dict output; any subset of fields may be
     present, with absent fields left as None. ``usage``/``modelUsage`` are
     only stored when they are themselves dicts, so a malformed envelope cannot
-    smuggle a non-mapping through.
+    smuggle a non-mapping through. If the envelope parses as a dict but none
+    of the tracked fields are present, this is logged as a warning -- for an
+    engine whose schema isn't confirmed (i.e. grok), a run of all-None fields
+    is indistinguishable from a silent field-name mismatch, so the warning is
+    the defensive fallback until real captured output confirms the schema.
     """
-    # Source: claude / grok --output-format json both expose total_cost_usd,
-    # usage, modelUsage (shared JSON envelope).
     try:
         data = json.loads(stdout)
     except (json.JSONDecodeError, ValueError):
@@ -35,9 +46,22 @@ def parse_usage_report_json(stdout: str) -> EngineUsageReport | None:
 
     raw_usage = data.get("usage")
     raw_model_usage = data.get("modelUsage")
+    total_cost_usd = data.get("total_cost_usd")
+
+    if (
+        total_cost_usd is None
+        and not isinstance(raw_usage, dict)
+        and not isinstance(raw_model_usage, dict)
+    ):
+        logger.warning(
+            "%s --output-format json produced no recognized cost/usage fields "
+            "(total_cost_usd/usage/modelUsage all absent); the shared schema "
+            "assumption may not hold for this engine",
+            engine,
+        )
 
     return EngineUsageReport(
-        total_cost_usd=data.get("total_cost_usd"),
+        total_cost_usd=total_cost_usd,
         usage=raw_usage if isinstance(raw_usage, dict) else None,
         model_usage=raw_model_usage if isinstance(raw_model_usage, dict) else None,
     )
