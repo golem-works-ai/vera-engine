@@ -257,14 +257,14 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         1.875,
         Tier.clay,
     ),
-    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-10-09.
     _ModelDef(
-        "openrouter/z-ai/glm-5.2",
+        "openrouter/z-ai/glm-5.3",
         "opencode",
         "openrouter",
-        "z-ai/glm-5.2",
-        0.462,
-        1.452,
+        "z-ai/glm-5.3",
+        0.04,
+        4.8,
         Tier.stone,
     ),
 )
