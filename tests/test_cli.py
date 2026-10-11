@@ -371,19 +371,21 @@ def test_main_run_timeout_returns_124(tmp_path, monkeypatch, capsys):
 def test_main_run_missing_credentials_exits_before_render(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    with patch("vera_engine.cli.render_local") as fake_render_local:
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "run",
-                    "--engine",
-                    "codex",
-                    "--workspace",
-                    str(tmp_path),
-                    "--prompt",
-                    "hi",
-                ]
-            )
+    with (
+        patch("vera_engine.cli.render_local") as fake_render_local,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(
+            [
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+            ]
+        )
 
     assert exc_info.value.code == 1
     fake_render_local.assert_not_called()

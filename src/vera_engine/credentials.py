@@ -86,7 +86,7 @@ def _is_strategy_label(cls: type, name: str) -> bool:
         return False
     try:
         hints = get_type_hints(cls)
-    except Exception:
+    except Exception:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         return False
     hint = hints.get(name)
     if hint is None:

@@ -82,7 +82,7 @@ def check_openrouter() -> ProviderCapacity:
             remaining_usd=remaining,
             detail=f"${remaining:.2f} remaining",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("OpenRouter credits check failed: %s", exc)
         return ProviderCapacity(
             "openrouter", available=bool(key), detail=f"check failed: {exc}"
@@ -96,9 +96,9 @@ def _prefer_subscription(cap: ProviderCapacity) -> bool:
     """True when a live subscription should beat an API key."""
     if not cap.available or cap.auth_method != "oauth":
         return False
-    if cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT:
-        return False
-    return True
+    return not (
+        cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT
+    )
 
 
 def _api_key_capacity(provider: str) -> ProviderCapacity:
@@ -201,7 +201,7 @@ def _check_claude_code_subscription() -> ProviderCapacity:
         return ProviderCapacity(
             "anthropic", available=False, detail="anthropic usage check timed out"
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("Anthropic usage check failed: %s", exc)
         return ProviderCapacity(
             "anthropic", available=False, detail=f"check failed: {exc}"
@@ -354,9 +354,10 @@ def _tmux_capture(session: str) -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         return r.stdout if r.returncode == 0 else ""
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return ""
 
 
@@ -366,9 +367,10 @@ def _tmux_send(session: str, *keys: str) -> None:
             ["tmux", "send-keys", "-t", session, *keys],
             capture_output=True,
             timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _tmux_send_literal(session: str, text: str) -> None:
@@ -378,9 +380,10 @@ def _tmux_send_literal(session: str, text: str) -> None:
             ["tmux", "send-keys", "-t", session, "-l", text],
             capture_output=True,
             timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _tmux_kill(session: str) -> None:
@@ -389,9 +392,10 @@ def _tmux_kill(session: str) -> None:
             ["tmux", "kill-session", "-t", session],
             capture_output=True,
             timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _check_codex_status() -> ProviderCapacity | None:
@@ -408,6 +412,7 @@ def _check_codex_status() -> ProviderCapacity | None:
             ["tmux", "new-session", "-d", "-s", _TMUX_SESSION, "-x", "120", "-y", "40"],
             capture_output=True,
             timeout=5,
+            check=False,
         )
         if r.returncode != 0:
             return None
@@ -463,7 +468,7 @@ def _check_codex_status() -> ProviderCapacity | None:
 
         logger.debug("codex /status did not render in time")
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("codex status check failed: %s", exc)
         return None
     finally:
@@ -577,6 +582,7 @@ def _check_grok_usage() -> ProviderCapacity | None:
             capture_output=True,
             timeout=5,
             env=env,
+            check=False,
         )
         if r.returncode != 0:
             return None
@@ -616,7 +622,7 @@ def _check_grok_usage() -> ProviderCapacity | None:
 
         logger.debug("grok /usage did not render in time")
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("grok usage check failed: %s", exc)
         return None
     finally:
@@ -693,6 +699,7 @@ def _check_grok_models() -> ProviderCapacity:
             text=True,
             timeout=15,
             env=env,
+            check=False,
         )
         return _parse_grok_models(f"{result.stdout}\n{result.stderr}")
     except FileNotFoundError:
@@ -701,7 +708,7 @@ def _check_grok_models() -> ProviderCapacity:
         return ProviderCapacity(
             "xai", available=False, detail="grok models check timed out"
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("Grok models check failed: %s", exc)
         return ProviderCapacity("xai", available=False, detail=f"check failed: {exc}")
 

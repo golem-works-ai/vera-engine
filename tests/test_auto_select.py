@@ -154,16 +154,20 @@ def test_select_model_engines_allowlist():
 
 def test_select_model_engine_not_in_engines_raises():
     config = _uniform_config()
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
-        with pytest.raises(ValueError, match="is not in engines allowlist"):
-            select_model(config, engine="opencode", engines={"grok"})
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_all_healthy()),
+        pytest.raises(ValueError, match="is not in engines allowlist"),
+    ):
+        select_model(config, engine="opencode", engines={"grok"})
 
 
 def test_raises_when_none_available():
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_none_available()):
-        with pytest.raises(ValueError, match="no usable model"):
-            select_model(config)
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_none_available()),
+        pytest.raises(ValueError, match="no usable model"),
+    ):
+        select_model(config)
 
 
 def test_only_anthropic_available():
@@ -384,9 +388,11 @@ def test_exclude_all_raises():
 
     all_ids = {s.model_id for s in get_catalog()}
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
-        with pytest.raises(ValueError, match="no usable model"):
-            select_model(config, exclude=all_ids)
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_all_healthy()),
+        pytest.raises(ValueError, match="no usable model"),
+    ):
+        select_model(config, exclude=all_ids)
 
 
 def test_exclude_with_tier_picks_next_at_tier():

@@ -1,5 +1,7 @@
 """Tests for EngineInvocation, MaterializedFile, and RunResult."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from vera_engine.credentials import SecretRef
@@ -98,7 +100,7 @@ def test_engine_invocation_with_files_and_prompt_path(tmp_path):
 
 def test_engine_invocation_is_frozen(tmp_path):
     inv = EngineInvocation(engine="codex", argv=("codex",), env={}, workdir=tmp_path)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         inv.engine = "other"
 
 
@@ -147,7 +149,7 @@ def test_run_result_is_frozen():
         engine="codex",
         argv=("codex",),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         result.returncode = 1
 
 
@@ -215,7 +217,7 @@ def test_engine_usage_report_stores_fields():
 
 def test_engine_usage_report_is_frozen():
     report = EngineUsageReport(total_cost_usd=1.0)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         report.total_cost_usd = 2.0
 
 
@@ -230,7 +232,12 @@ def test_engine_usage_report_passes_credential_guard():
 
 def test_run_result_usage_report_defaults_to_none():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.usage_report is None
 

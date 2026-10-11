@@ -16,6 +16,7 @@ from vera_engine.auto_select import (
 from vera_engine.capacity import check_all
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
+from vera_engine.invocation import EngineInvocation
 from vera_engine.models import TIER_NAMES, Tier, get_catalog
 from vera_engine.render.local import ResumeFailedError, render_local
 from vera_engine.request import AgentRunRequest

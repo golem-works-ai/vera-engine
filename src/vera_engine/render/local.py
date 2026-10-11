@@ -167,6 +167,7 @@ def render_local(
                 capture_output=True,
                 text=True,
                 timeout=invocation.timeout_seconds,
+                check=False,
             )
             # Fail fast: a resume that exits non-zero almost certainly means
             # the session id is invalid or stale. Timeouts fall through to the

@@ -209,25 +209,29 @@ def test_check_openai_with_key():
 
 
 def test_check_openai_without_key_falls_back_to_codex():
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity._check_codex_status") as mock_cs:
-            mock_cs.return_value = ProviderCapacity(
-                "openai",
-                available=True,
-                remaining_pct=99.0,
-                detail="codex Plus: 99% weekly left",
-                auth_method="oauth",
-            )
-            cap = check_openai()
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity._check_codex_status") as mock_cs,
+    ):
+        mock_cs.return_value = ProviderCapacity(
+            "openai",
+            available=True,
+            remaining_pct=99.0,
+            detail="codex Plus: 99% weekly left",
+            auth_method="oauth",
+        )
+        cap = check_openai()
     assert cap.available is True
     assert cap.remaining_pct == 99.0
     assert cap.auth_method == "oauth"
 
 
 def test_check_openai_without_key_codex_unavailable():
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity._check_codex_status", return_value=None):
-            cap = check_openai()
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity._check_codex_status", return_value=None),
+    ):
+        cap = check_openai()
     assert cap.available is False
 
 
@@ -239,11 +243,11 @@ def test_check_anthropic_prefers_subscription_when_key_also_set():
         detail="session 96%, week 91% remaining",
         auth_method="oauth",
     )
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch(
-            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
-        ):
-            cap = check_anthropic()
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
+        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
+    ):
+        cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "oauth"
     assert cap.remaining_pct == 91.0
@@ -257,11 +261,11 @@ def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
         detail="session 2%, week 1% remaining",
         auth_method="oauth",
     )
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch(
-            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
-        ):
-            cap = check_anthropic()
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
+        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
+    ):
+        cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
@@ -273,20 +277,22 @@ def test_check_anthropic_falls_through_to_api_key_when_probe_fails():
         available=False,
         detail="not on subscription",
     )
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
-        with patch(
-            "vera_engine.capacity._check_claude_code_subscription", return_value=sub
-        ):
-            cap = check_anthropic()
+    with (
+        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
+        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
+    ):
+        cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
 
 
 def test_check_anthropic_no_token_no_key():
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity._anthropic_oauth_token", return_value=None):
-            cap = check_anthropic()
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity._anthropic_oauth_token", return_value=None),
+    ):
+        cap = check_anthropic()
     assert cap.available is False
     assert "not on subscription" in cap.detail
 
@@ -412,24 +418,28 @@ def test_check_xai_prefers_usage_subscription_when_key_also_set():
         detail="grok SuperGrok: 47% weekly remaining",
         auth_method="oauth",
     )
-    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"):
-            with patch("vera_engine.capacity._check_grok_usage", return_value=usage):
-                cap = check_xai()
+    with (
+        patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True),
+        patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"),
+        patch("vera_engine.capacity._check_grok_usage", return_value=usage),
+    ):
+        cap = check_xai()
     assert cap.available is True
     assert cap.auth_method == "oauth"
     assert cap.remaining_pct == 47.0
 
 
 def test_check_xai_prefers_subscription_when_key_also_set():
-    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"):
-            with patch("vera_engine.capacity._check_grok_usage", return_value=None):
-                with patch("vera_engine.capacity.subprocess.run") as mock_run:
-                    mock_run.return_value.returncode = 0
-                    mock_run.return_value.stdout = GROK_MODELS_LOGGED_IN
-                    mock_run.return_value.stderr = ""
-                    cap = check_xai()
+    with (
+        patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True),
+        patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"),
+        patch("vera_engine.capacity._check_grok_usage", return_value=None),
+        patch("vera_engine.capacity.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = GROK_MODELS_LOGGED_IN
+        mock_run.return_value.stderr = ""
+        cap = check_xai()
     assert cap.available is True
     assert cap.auth_method == "oauth"
     assert cap.remaining_pct is None
@@ -443,13 +453,15 @@ def test_check_xai_tmux_missing_falls_back_to_grok_models():
     def which(name: str) -> str | None:
         return "/usr/bin/grok" if name == "grok" else None
 
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", side_effect=which):
-            with patch("vera_engine.capacity.subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 0
-                mock_run.return_value.stdout = GROK_MODELS_LOGGED_IN
-                mock_run.return_value.stderr = ""
-                cap = check_xai()
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity.shutil.which", side_effect=which),
+        patch("vera_engine.capacity.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = GROK_MODELS_LOGGED_IN
+        mock_run.return_value.stderr = ""
+        cap = check_xai()
     assert cap.available is True
     assert cap.auth_method == "oauth"
     assert cap.remaining_pct is None
@@ -458,43 +470,51 @@ def test_check_xai_tmux_missing_falls_back_to_grok_models():
 
 
 def test_check_xai_falls_through_to_api_key():
-    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"):
-            with patch("vera_engine.capacity._check_grok_usage", return_value=None):
-                with patch("vera_engine.capacity.subprocess.run") as mock_run:
-                    mock_run.return_value.returncode = 0
-                    mock_run.return_value.stdout = GROK_MODELS_UNAUTH
-                    mock_run.return_value.stderr = ""
-                    cap = check_xai()
+    with (
+        patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True),
+        patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/grok"),
+        patch("vera_engine.capacity._check_grok_usage", return_value=None),
+        patch("vera_engine.capacity.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = GROK_MODELS_UNAUTH
+        mock_run.return_value.stderr = ""
+        cap = check_xai()
     assert cap.available is True
     assert cap.auth_method == "api-key"
     assert "API key" in cap.detail
 
 
 def test_check_xai_api_key_requires_cli():
-    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", return_value=None):
-            cap = check_xai()
+    with (
+        patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=True),
+        patch("vera_engine.capacity.shutil.which", return_value=None),
+    ):
+        cap = check_xai()
     assert cap.available is False
     assert "not found" in cap.detail
 
 
 def test_check_xai_no_key_no_cli():
-    with patch.dict(os.environ, {}, clear=True):
-        with patch("vera_engine.capacity.shutil.which", return_value=None):
-            cap = check_xai()
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity.shutil.which", return_value=None),
+    ):
+        cap = check_xai()
     assert cap.available is False
     assert "not found" in cap.detail
 
 
 def test_check_grok_usage_strips_api_key_and_uses_dedicated_session():
-    with patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=False):
-        with patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/bin"):
-            with patch("vera_engine.capacity.subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 1
-                mock_run.return_value.stdout = ""
-                mock_run.return_value.stderr = ""
-                assert _check_grok_usage() is None
+    with (
+        patch.dict(os.environ, {"XAI_API_KEY": "xai-test"}, clear=False),
+        patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/bin"),
+        patch("vera_engine.capacity.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+        assert _check_grok_usage() is None
     new_sess = next(
         c
         for c in mock_run.call_args_list
@@ -514,11 +534,13 @@ def test_check_all_includes_xai(tmp_path, monkeypatch):
         "vera_engine.capacity._CAPACITY_CACHE_PATH", tmp_path / "capacity.json"
     )
     fake = ProviderCapacity("xai", available=False, detail="stub")
-    with patch("vera_engine.capacity.check_anthropic", return_value=fake):
-        with patch("vera_engine.capacity.check_openrouter", return_value=fake):
-            with patch("vera_engine.capacity.check_openai", return_value=fake):
-                with patch("vera_engine.capacity.check_xai", return_value=fake):
-                    caps = check_all()
+    with (
+        patch("vera_engine.capacity.check_anthropic", return_value=fake),
+        patch("vera_engine.capacity.check_openrouter", return_value=fake),
+        patch("vera_engine.capacity.check_openai", return_value=fake),
+        patch("vera_engine.capacity.check_xai", return_value=fake),
+    ):
+        caps = check_all()
     assert set(caps) == {"anthropic", "openrouter", "openai", "xai"}
 
 

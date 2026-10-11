@@ -64,7 +64,7 @@ def get_openrouter_pricing(
         return _cache
     try:
         prices = fetch_openrouter_pricing()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("OpenRouter pricing fetch failed: %s", exc)
         return _cache
     if not prices:

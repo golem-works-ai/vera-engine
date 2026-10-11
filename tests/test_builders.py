@@ -237,7 +237,7 @@ def test_claude_code_parse_usage_report_none_on_plain_text():
 
 
 def test_claude_code_parse_usage_report_none_on_non_dict_json():
-    assert ClaudeCodeBuilder().parse_usage_report('[1, 2, 3]') is None
+    assert ClaudeCodeBuilder().parse_usage_report("[1, 2, 3]") is None
 
 
 def test_claude_code_parse_usage_report_none_on_empty():
@@ -662,7 +662,7 @@ def test_grok_parse_usage_report_none_on_plain_text():
 
 
 def test_grok_parse_usage_report_none_on_non_dict_json():
-    assert GrokBuilder().parse_usage_report('[1, 2, 3]') is None
+    assert GrokBuilder().parse_usage_report("[1, 2, 3]") is None
 
 
 def test_grok_parse_usage_report_none_on_empty():
