@@ -22,7 +22,7 @@ class GrokBuilder(EngineBuilder):
         return frozenset({"env-key", "none"})
 
     def default_model(self) -> str | None:
-        return "grok-4.6"
+        return "grok-4.7"
 
     def build_invocation(
         self, request: AgentRunRequest, strategy: str

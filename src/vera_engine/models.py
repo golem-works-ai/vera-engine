@@ -228,13 +228,13 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     ),
     # xAI direct via grok. Same list price as the OpenRouter row.
     # Capacity picks oauth vs env-key. Do not add grok-4.5.
-    _ModelDef("grok-4.6", "grok", "xai", "x-ai/grok-4.6", 2.0, 6.0, Tier.bronze),
-    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    _ModelDef("grok-4.7", "grok", "xai", "x-ai/grok-4.7", 2.0, 6.0, Tier.bronze),
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-10-11.
     _ModelDef(
-        "openrouter/x-ai/grok-4.6",
+        "openrouter/x-ai/grok-4.7",
         "opencode",
         "openrouter",
-        "x-ai/grok-4.6",
+        "x-ai/grok-4.7",
         2.0,
         6.0,
         Tier.bronze,

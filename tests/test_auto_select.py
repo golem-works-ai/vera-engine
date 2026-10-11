@@ -290,7 +290,7 @@ def test_xai_subscription_selects_grok_none():
     with patch("vera_engine.auto_select.check_all", return_value=_only_xai_oauth()):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.engine == "grok"
-    assert sel.model.model_id == "grok-4.6"
+    assert sel.model.model_id == "grok-4.7"
     assert sel.model.provider == "xai"
     assert sel.strategy == "none"
 
@@ -302,7 +302,7 @@ def test_xai_api_key_selects_grok_env_key():
     with patch("vera_engine.auto_select.check_all", return_value=_only_xai_api_key()):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.engine == "grok"
-    assert sel.model.model_id == "grok-4.6"
+    assert sel.model.model_id == "grok-4.7"
     assert sel.strategy == "env-key"
 
 
@@ -312,7 +312,7 @@ def test_xai_unavailable_falls_back_to_openrouter_grok():
     )
     with patch("vera_engine.auto_select.check_all", return_value=_only_openrouter()):
         sel = select_model(config, tier=Tier.bronze)
-    assert sel.model.model_id == "openrouter/x-ai/grok-4.6"
+    assert sel.model.model_id == "openrouter/x-ai/grok-4.7"
     assert sel.model.engine == "opencode"
     assert sel.strategy == "env-key"
 

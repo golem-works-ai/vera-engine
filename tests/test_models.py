@@ -67,8 +67,8 @@ def test_model_ids_unique():
     assert len(ids) == len(set(ids)), f"duplicate model IDs: {ids}"
 
 
-def test_catalog_has_direct_grok_46():
-    rows = [s for s in get_catalog() if s.model_id == "grok-4.6"]
+def test_catalog_has_direct_grok_47():
+    rows = [s for s in get_catalog() if s.model_id == "grok-4.7"]
     assert len(rows) == 1
     spec = rows[0]
     assert spec.engine == "grok"
