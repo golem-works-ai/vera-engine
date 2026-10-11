@@ -424,7 +424,7 @@ def test_main_run_none_strategy_needs_no_credentials(tmp_path, monkeypatch):
 
 def _clay_codex_selection() -> Selection:
     spec = ModelSpec(
-        model_id="gpt-5.6-luna",
+        model_id="gpt-6-luna",
         engine="codex",
         provider="openai",
         input_cost=1.0,
@@ -477,7 +477,7 @@ def test_main_engine_plus_tier_without_model_selects(tmp_path, monkeypatch):
     assert kwargs["tier"] == Tier.clay
     argv = captured["invocation"].argv
     assert "--model" in argv
-    assert argv[argv.index("--model") + 1] == "gpt-5.6-luna"
+    assert argv[argv.index("--model") + 1] == "gpt-6-luna"
     assert "OPENAI_API_KEY" not in captured["invocation"].env
 
 

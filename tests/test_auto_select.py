@@ -260,11 +260,14 @@ def test_tier_bronze_selects_cheapest_at_or_above_bronze():
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.tier >= Tier.bronze
     usable = _usable_providers(caps)
-    ranked = [
-        spec
-        for spec in qualifying_models(config, tier=Tier.bronze)
-        if spec.provider in usable
-    ]
+    ranked = sorted(
+        (
+            spec
+            for spec in qualifying_models(config, tier=Tier.bronze)
+            if spec.provider in usable
+        ),
+        key=lambda spec: selection_cost(spec, config, caps),
+    )
     assert ranked
     assert sel.model.model_id == ranked[0].model_id
 
