@@ -1,6 +1,6 @@
 """Tests for SecretRef, CredentialBundle, and the structural guard."""
 
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from enum import StrEnum
 
 import pytest
@@ -45,7 +45,7 @@ def test_secret_ref_str_does_not_look_like_a_value():
 
 def test_secret_ref_is_frozen():
     ref = SecretRef("X")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         ref.name = "Y"
 
 

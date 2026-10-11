@@ -1,5 +1,6 @@
 """Tests for AgentRunRequest validation."""
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -112,7 +113,7 @@ def test_zero_timeout_raises(tmp_path):
 
 def test_frozen_dataclass_is_immutable(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         req.engine = "other"
 
 

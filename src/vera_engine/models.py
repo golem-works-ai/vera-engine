@@ -117,14 +117,19 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.clay,
     ),
     # OpenAI via codex
+    # Prices from openrouter.ai/api/v1/models on 2026-10-11. The codex CLI on a
+    # ChatGPT account accepts gpt-6-sol/luna/astra, not gpt-6.1-*.
     _ModelDef(
-        "gpt-5.6-sol", "codex", "openai", "openai/gpt-5.6-sol", 5.0, 30.0, Tier.bronze
+        "gpt-6-astra", "codex", "openai", "openai/gpt-6-astra", 10.0, 50.0, Tier.iron
+    ),
+    _ModelDef(
+        "gpt-6-sol", "codex", "openai", "openai/gpt-6-sol", 2.0, 10.0, Tier.bronze
     ),
     _ModelDef(
         "gpt-5.6-terra", "codex", "openai", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone
     ),
     _ModelDef(
-        "gpt-5.6-luna", "codex", "openai", "openai/gpt-5.6-luna", 0.10, 0.60, Tier.clay
+        "gpt-6-luna", "codex", "openai", "openai/gpt-6-luna", 0.10, 0.50, Tier.clay
     ),
     # OpenRouter via opencode
     _ModelDef(
@@ -200,12 +205,21 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.clay,
     ),
     _ModelDef(
-        "openrouter/openai/gpt-5.6-sol",
+        "openrouter/openai/gpt-6-astra",
         "opencode",
         "openrouter",
-        "openai/gpt-5.6-sol",
-        5.0,
-        30.0,
+        "openai/gpt-6-astra",
+        10.0,
+        50.0,
+        Tier.iron,
+    ),
+    _ModelDef(
+        "openrouter/openai/gpt-6.1-sol",
+        "opencode",
+        "openrouter",
+        "openai/gpt-6.1-sol",
+        2.0,
+        10.0,
         Tier.bronze,
     ),
     _ModelDef(
@@ -218,23 +232,23 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.stone,
     ),
     _ModelDef(
-        "openrouter/openai/gpt-5.6-luna",
+        "openrouter/openai/gpt-6-luna",
         "opencode",
         "openrouter",
-        "openai/gpt-5.6-luna",
+        "openai/gpt-6-luna",
         0.10,
-        0.60,
+        0.50,
         Tier.clay,
     ),
     # xAI direct via grok. Same list price as the OpenRouter row.
     # Capacity picks oauth vs env-key. Do not add grok-4.5.
-    _ModelDef("grok-4.6", "grok", "xai", "x-ai/grok-4.6", 2.0, 6.0, Tier.bronze),
-    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-08-15.
+    _ModelDef("grok-4.7", "grok", "xai", "x-ai/grok-4.7", 2.0, 6.0, Tier.bronze),
+    # Pricing fetched live from openrouter.ai/api/v1/models on 2026-10-11.
     _ModelDef(
-        "openrouter/x-ai/grok-4.6",
+        "openrouter/x-ai/grok-4.7",
         "opencode",
         "openrouter",
-        "x-ai/grok-4.6",
+        "x-ai/grok-4.7",
         2.0,
         6.0,
         Tier.bronze,

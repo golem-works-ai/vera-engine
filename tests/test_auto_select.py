@@ -154,16 +154,20 @@ def test_select_model_engines_allowlist():
 
 def test_select_model_engine_not_in_engines_raises():
     config = _uniform_config()
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
-        with pytest.raises(ValueError, match="is not in engines allowlist"):
-            select_model(config, engine="opencode", engines={"grok"})
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_all_healthy()),
+        pytest.raises(ValueError, match="is not in engines allowlist"),
+    ):
+        select_model(config, engine="opencode", engines={"grok"})
 
 
 def test_raises_when_none_available():
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_none_available()):
-        with pytest.raises(ValueError, match="no usable model"):
-            select_model(config)
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_none_available()),
+        pytest.raises(ValueError, match="no usable model"),
+    ):
+        select_model(config)
 
 
 def test_only_anthropic_available():
@@ -256,11 +260,14 @@ def test_tier_bronze_selects_cheapest_at_or_above_bronze():
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.tier >= Tier.bronze
     usable = _usable_providers(caps)
-    ranked = [
-        spec
-        for spec in qualifying_models(config, tier=Tier.bronze)
-        if spec.provider in usable
-    ]
+    ranked = sorted(
+        (
+            spec
+            for spec in qualifying_models(config, tier=Tier.bronze)
+            if spec.provider in usable
+        ),
+        key=lambda spec: selection_cost(spec, config, caps),
+    )
     assert ranked
     assert sel.model.model_id == ranked[0].model_id
 
@@ -286,7 +293,7 @@ def test_xai_subscription_selects_grok_none():
     with patch("vera_engine.auto_select.check_all", return_value=_only_xai_oauth()):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.engine == "grok"
-    assert sel.model.model_id == "grok-4.6"
+    assert sel.model.model_id == "grok-4.7"
     assert sel.model.provider == "xai"
     assert sel.strategy == "none"
 
@@ -298,7 +305,7 @@ def test_xai_api_key_selects_grok_env_key():
     with patch("vera_engine.auto_select.check_all", return_value=_only_xai_api_key()):
         sel = select_model(config, tier=Tier.bronze)
     assert sel.model.engine == "grok"
-    assert sel.model.model_id == "grok-4.6"
+    assert sel.model.model_id == "grok-4.7"
     assert sel.strategy == "env-key"
 
 
@@ -308,7 +315,7 @@ def test_xai_unavailable_falls_back_to_openrouter_grok():
     )
     with patch("vera_engine.auto_select.check_all", return_value=_only_openrouter()):
         sel = select_model(config, tier=Tier.bronze)
-    assert sel.model.model_id == "openrouter/x-ai/grok-4.6"
+    assert sel.model.model_id == "openrouter/x-ai/grok-4.7"
     assert sel.model.engine == "opencode"
     assert sel.strategy == "env-key"
 
@@ -384,9 +391,11 @@ def test_exclude_all_raises():
 
     all_ids = {s.model_id for s in get_catalog()}
     config = EngineConfig(provider_ratios={})
-    with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
-        with pytest.raises(ValueError, match="no usable model"):
-            select_model(config, exclude=all_ids)
+    with (
+        patch("vera_engine.auto_select.check_all", return_value=_all_healthy()),
+        pytest.raises(ValueError, match="no usable model"),
+    ):
+        select_model(config, exclude=all_ids)
 
 
 def test_exclude_with_tier_picks_next_at_tier():

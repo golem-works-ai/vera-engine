@@ -371,19 +371,21 @@ def test_main_run_timeout_returns_124(tmp_path, monkeypatch, capsys):
 def test_main_run_missing_credentials_exits_before_render(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    with patch("vera_engine.cli.render_local") as fake_render_local:
-        with pytest.raises(SystemExit) as exc_info:
-            main(
-                [
-                    "run",
-                    "--engine",
-                    "codex",
-                    "--workspace",
-                    str(tmp_path),
-                    "--prompt",
-                    "hi",
-                ]
-            )
+    with (
+        patch("vera_engine.cli.render_local") as fake_render_local,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(
+            [
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+            ]
+        )
 
     assert exc_info.value.code == 1
     fake_render_local.assert_not_called()
@@ -422,7 +424,7 @@ def test_main_run_none_strategy_needs_no_credentials(tmp_path, monkeypatch):
 
 def _clay_codex_selection() -> Selection:
     spec = ModelSpec(
-        model_id="gpt-5.6-luna",
+        model_id="gpt-6-luna",
         engine="codex",
         provider="openai",
         input_cost=1.0,
@@ -475,7 +477,7 @@ def test_main_engine_plus_tier_without_model_selects(tmp_path, monkeypatch):
     assert kwargs["tier"] == Tier.clay
     argv = captured["invocation"].argv
     assert "--model" in argv
-    assert argv[argv.index("--model") + 1] == "gpt-5.6-luna"
+    assert argv[argv.index("--model") + 1] == "gpt-6-luna"
     assert "OPENAI_API_KEY" not in captured["invocation"].env
 
 

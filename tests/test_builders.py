@@ -237,7 +237,7 @@ def test_claude_code_parse_usage_report_none_on_plain_text():
 
 
 def test_claude_code_parse_usage_report_none_on_non_dict_json():
-    assert ClaudeCodeBuilder().parse_usage_report('[1, 2, 3]') is None
+    assert ClaudeCodeBuilder().parse_usage_report("[1, 2, 3]") is None
 
 
 def test_claude_code_parse_usage_report_none_on_empty():
@@ -505,7 +505,7 @@ def test_grok_supported_strategies():
 
 
 def test_grok_default_model():
-    assert GrokBuilder().default_model() == "grok-4.6"
+    assert GrokBuilder().default_model() == "grok-4.7"
 
 
 def test_grok_env_key_strategy(tmp_path):
@@ -520,7 +520,7 @@ def test_grok_env_key_strategy(tmp_path):
     assert inv.argv[inv.argv.index("--output-format") + 1] == "plain"
     assert "--always-approve" in inv.argv
     assert "-m" in inv.argv
-    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.7"
     assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
     assert inv.home_strategy == "hermetic"
     assert inv.prompt_path == expected_prompt_path
@@ -541,11 +541,11 @@ def test_grok_none_strategy_uses_real_home(tmp_path):
 
 def test_grok_model_override(tmp_path):
     req = AgentRunRequest(
-        engine="grok", prompt="x", workspace=tmp_path, model="grok-4.6"
+        engine="grok", prompt="x", workspace=tmp_path, model="grok-4.7"
     )
     inv = GrokBuilder().build_invocation(req, "env-key")
     assert "-m" in inv.argv
-    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.7"
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
@@ -662,7 +662,7 @@ def test_grok_parse_usage_report_none_on_plain_text():
 
 
 def test_grok_parse_usage_report_none_on_non_dict_json():
-    assert GrokBuilder().parse_usage_report('[1, 2, 3]') is None
+    assert GrokBuilder().parse_usage_report("[1, 2, 3]") is None
 
 
 def test_grok_parse_usage_report_none_on_empty():

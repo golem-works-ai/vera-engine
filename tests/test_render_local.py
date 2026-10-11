@@ -473,7 +473,11 @@ def test_render_local_threads_usage_report_via_builder(tmp_path):
 
 def test_render_local_no_builder_leaves_usage_report_none(tmp_path):
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.usage_report is None
@@ -488,7 +492,11 @@ def test_render_local_builder_returning_none_usage_report_keeps_none(tmp_path):
             return None
 
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(
         inv, CredentialBundle(values={}), builder=_NoneReportBuilder()
