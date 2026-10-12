@@ -682,3 +682,11 @@ def test_build_and_run_forwards_builder_for_session_id(tmp_path, monkeypatch):
     # The builder must be forwarded so RunResult.session_id can be populated.
     assert captured["builder"] is not None
     assert captured["builder"].engine_name == captured["invocation"].engine
+
+
+@pytest.mark.parametrize("capacity", [_only_anthropic_oauth, _only_anthropic_api_key])
+def test_bronze_anthropic_selection_uses_opus_55(capacity):
+    with patch("vera_engine.auto_select.check_all", return_value=capacity()):
+        selection = select_model(EngineConfig(), provider="anthropic", tier=Tier.bronze)
+    assert selection.model.model_id == "claude-opus-5-5"
+    assert selection.model.engine == "claude-code"
