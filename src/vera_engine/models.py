@@ -81,12 +81,12 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.iron,
     ),
     _ModelDef(
-        "claude-opus-5",
+        "claude-opus-5-5",
         "claude-code",
         "anthropic",
-        "anthropic/claude-opus-5",
-        5.0,
-        25.0,
+        "anthropic/claude-opus-5.5",
+        4.0,
+        20.0,
         Tier.bronze,
     ),
     _ModelDef(
@@ -98,12 +98,8 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         10.0,
         Tier.stone,
     ),
-    # 4.6 models use ~30% fewer tokens per task. Costs are token-adjusted
-    # (actual $/MTok * 0.7) to reflect per-task savings. No live pricing
-    # override — the adjustment is the point.
-    _ModelDef(
-        "claude-opus-4-6", "claude-code", "anthropic", "", 3.50, 17.50, Tier.bronze
-    ),
+    # Sonnet 4.6 costs include its ~30% token savings per task.
+    # Live pricing would overwrite that adjustment.
     _ModelDef(
         "claude-sonnet-4-6", "claude-code", "anthropic", "", 2.10, 10.50, Tier.stone
     ),
@@ -142,12 +138,12 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.iron,
     ),
     _ModelDef(
-        "openrouter/anthropic/claude-opus-5",
+        "openrouter/anthropic/claude-opus-5.5",
         "opencode",
         "openrouter",
-        "anthropic/claude-opus-5",
-        5.0,
-        25.0,
+        "anthropic/claude-opus-5.5",
+        4.0,
+        20.0,
         Tier.bronze,
     ),
     _ModelDef(
@@ -158,15 +154,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         2.0,
         10.0,
         Tier.stone,
-    ),
-    _ModelDef(
-        "openrouter/anthropic/claude-opus-4.6",
-        "opencode",
-        "openrouter",
-        "",
-        3.50,
-        17.50,
-        Tier.bronze,
     ),
     _ModelDef(
         "openrouter/anthropic/claude-sonnet-4.6",

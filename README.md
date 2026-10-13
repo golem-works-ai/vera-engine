@@ -64,6 +64,16 @@ otherwise be invisible to cost dashboards. Non-structured runs, and the
 
 ### Model costs
 
+Opus 5.5 is the bronze-tier Opus model in the catalog.
+Use `--engine claude-code --model claude-opus-5-5` for native Claude Code.
+Use `--engine opencode --model openrouter/anthropic/claude-opus-5.5` for OpenRouter.
+Automatic selection excludes OpenCode Claude models.
+
+Opus 5 and Opus 4.6 are retired from the catalog.
+Existing callers that specify both an engine and a legacy model still pass
+that model through to the provider.
+Callers that specify only a legacy model must migrate to Opus 5.5.
+
 `python -m vera_engine models` shows the same effective costs used by
 capacity-aware model selection. It checks local Claude Code, Codex, and Grok
 OAuth sessions. A detected subscription uses a `0.1` cost ratio unless

@@ -1,5 +1,7 @@
 """Tests for model catalog."""
 
+from unittest.mock import patch
+
 import pytest
 
 from vera_engine.models import (
@@ -96,3 +98,39 @@ def test_catalog_has_gpt6_codex_and_openrouter_rows():
     assert by_id["openrouter/openai/gpt-6-luna"].engine == "opencode"
     assert "gpt-5.6-sol" not in by_id
     assert "gpt-5.6-terra" in by_id
+
+
+@pytest.mark.parametrize(
+    ("model_id", "engine", "provider"),
+    [
+        ("claude-opus-5-5", "claude-code", "anthropic"),
+        ("openrouter/anthropic/claude-opus-5.5", "opencode", "openrouter"),
+    ],
+)
+def test_opus_55_uses_provider_pricing_with_offline_fallback(model_id, engine, provider):
+    by_id = {spec.model_id: spec for spec in get_catalog()}
+    spec = by_id[model_id]
+    assert (spec.engine, spec.provider, spec.tier) == (engine, provider, Tier.bronze)
+    assert (spec.input_cost, spec.output_cost) == (4.0, 20.0)
+
+    def live_costs(openrouter_id):
+        if openrouter_id == "anthropic/claude-opus-5.5":
+            return (3.0, 15.0)
+        return None
+
+    with patch("vera_engine.pricing.openrouter_model_costs", side_effect=live_costs):
+        by_id = {spec.model_id: spec for spec in get_catalog()}
+    spec = by_id[model_id]
+    assert (spec.input_cost, spec.output_cost) == (3.0, 15.0)
+
+
+def test_catalog_retires_legacy_opus_models():
+    ids = {spec.model_id for spec in get_catalog()}
+    assert not ids.intersection(
+        {
+            "claude-opus-5",
+            "openrouter/anthropic/claude-opus-5",
+            "claude-opus-4-6",
+            "openrouter/anthropic/claude-opus-4.6",
+        }
+    )
