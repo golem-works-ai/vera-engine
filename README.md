@@ -73,6 +73,9 @@ OAuth sessions. A detected subscription uses a `0.1` cost ratio unless
 It reports quota use, elapsed-window use, and a usage-pressure score. Run
 `python -m vera_engine capacity --refresh` to query the providers immediately.
 
+OpenAI remaining quota comes from the ChatGPT login.
+`OPENAI_API_KEY` is the fallback when that login is missing or below 5%.
+
 ## Adding an Engine
 
 Create a new file in `src/vera_engine/builders/` implementing `EngineBuilder`. Register it in `src/vera_engine/selection.py`. That's it.
