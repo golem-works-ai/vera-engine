@@ -147,7 +147,12 @@ def resolve_request(
             exclude=request.exclude,
             pins=request.pins,
         )
-    return replace(request, engine=sel.model.engine, model=sel.model.model_id)
+    return replace(
+        request,
+        engine=sel.model.engine,
+        model=sel.model.model_id,
+        effort=request.effort if request.effort is not None else sel.model.effort,
+    )
 
 
 def select_model(
