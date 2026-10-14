@@ -15,7 +15,7 @@ def test_valid_construction_defaults(tmp_path):
     assert req.prompt == "do stuff"
     assert req.workspace == tmp_path
     assert req.model is None
-    assert req.effort == "high"
+    assert req.effort is None
     assert req.timeout_seconds == 2400
     assert req.extra_env == {}
     assert req.credential_strategy == "env-key"

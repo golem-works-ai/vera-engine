@@ -27,6 +27,16 @@ class Tier(IntEnum):
     iron = 3
 
 
+VALID_EFFORTS = frozenset({"low", "medium", "high"})
+
+
+def validate_effort(effort: str | None) -> None:
+    if effort is not None and effort not in VALID_EFFORTS:
+        raise ValueError(
+            f"effort must be one of {sorted(VALID_EFFORTS)}, got {effort!r}"
+        )
+
+
 TIER_NAMES: tuple[str, ...] = tuple(t.name for t in Tier)
 
 
@@ -40,6 +50,11 @@ class ModelSpec:
     input_cost: float
     output_cost: float
     tier: Tier
+    # Reasoning effort used to qualify this row; None keeps engine defaults.
+    effort: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_effort(self.effort)
 
     def blended_cost(self, input_weight: float = 0.8) -> float:
         return self.input_cost * input_weight + self.output_cost * (1 - input_weight)
@@ -67,6 +82,10 @@ class _ModelDef:
     fallback_input: float
     fallback_output: float
     tier: Tier
+    effort: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_effort(self.effort)
 
 
 _MODEL_DEFS: tuple[_ModelDef, ...] = (
@@ -107,24 +126,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     _ModelDef(
         "claude-sonnet-4-6", "claude-code", "anthropic", "", 2.10, 10.50, Tier.stone
     ),
-    _ModelDef(
-        "claude-haiku-4-5-20251001",
-        "claude-code",
-        "anthropic",
-        "anthropic/claude-haiku-4.5",
-        1.0,
-        5.0,
-        Tier.clay,
-    ),
-    _ModelDef(
-        "claude-haiku-5-5",
-        "claude-code",
-        "anthropic",
-        "anthropic/claude-haiku-5.5",
-        0.10,
-        0.50,
-        Tier.clay,
-    ),
     # OpenAI via codex
     # Prices from openrouter.ai/api/v1/models on 2026-10-11. The codex CLI on a
     # ChatGPT account accepts gpt-6-sol/luna/astra, not gpt-6.1-*.
@@ -136,9 +137,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     ),
     _ModelDef(
         "gpt-5.6-terra", "codex", "openai", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone
-    ),
-    _ModelDef(
-        "gpt-6-luna", "codex", "openai", "openai/gpt-6-luna", 0.10, 0.50, Tier.clay
     ),
     # OpenRouter via opencode
     _ModelDef(
@@ -187,15 +185,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.stone,
     ),
     _ModelDef(
-        "openrouter/anthropic/claude-haiku-4.5",
-        "opencode",
-        "openrouter",
-        "anthropic/claude-haiku-4.5",
-        1.0,
-        5.0,
-        Tier.clay,
-    ),
-    _ModelDef(
         "openrouter/moonshotai/kimi-k3",
         "opencode",
         "openrouter",
@@ -203,15 +192,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         3.0,
         15.0,
         Tier.bronze,
-    ),
-    _ModelDef(
-        "openrouter/moonshotai/kimi-k2.7-code",
-        "opencode",
-        "openrouter",
-        "moonshotai/kimi-k2.7-code",
-        0.67,
-        3.40,
-        Tier.clay,
     ),
     _ModelDef(
         "openrouter/openai/gpt-6-astra",
@@ -240,15 +220,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         6.0,
         Tier.stone,
     ),
-    _ModelDef(
-        "openrouter/openai/gpt-6-luna",
-        "opencode",
-        "openrouter",
-        "openai/gpt-6-luna",
-        0.10,
-        0.50,
-        Tier.clay,
-    ),
     # xAI direct via grok. Same list price as the OpenRouter row.
     # Capacity picks oauth vs env-key. Do not add grok-4.5.
     _ModelDef("grok-4.7", "grok", "xai", "x-ai/grok-4.7", 2.0, 6.0, Tier.bronze),
@@ -262,24 +233,6 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         6.0,
         Tier.bronze,
     ),
-    _ModelDef(
-        "openrouter/moonshotai/kimi-k2.6",
-        "opencode",
-        "openrouter",
-        "moonshotai/kimi-k2.6",
-        0.5415,
-        2.28,
-        Tier.clay,
-    ),
-    _ModelDef(
-        "openrouter/google/gemini-3.7-flash",
-        "opencode",
-        "openrouter",
-        "google/gemini-3.7-flash",
-        0.375,
-        1.875,
-        Tier.clay,
-    ),
     # Pricing fetched live from openrouter.ai/api/v1/models on 2026-10-09.
     _ModelDef(
         "openrouter/z-ai/glm-5.3",
@@ -289,6 +242,60 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         0.04,
         4.8,
         Tier.stone,
+    ),
+    # Clay admission requires a passing vera pm-agent benchmark score
+    # (>= 22/32 exact on labels_v3) at the row's effort; see golem-works-ai/vera#8088.
+    _ModelDef(
+        "claude-haiku-5-5",
+        "claude-code",
+        "anthropic",
+        "anthropic/claude-haiku-5.5",
+        0.10,
+        0.50,
+        Tier.clay,
+    ),
+    _ModelDef(
+        "gpt-6-luna", "codex", "openai", "openai/gpt-6-luna", 0.10, 0.50, Tier.clay
+    ),
+    _ModelDef(
+        "openrouter/openai/gpt-6-luna",
+        "opencode",
+        "openrouter",
+        "openai/gpt-6-luna",
+        0.10,
+        0.50,
+        Tier.clay,
+    ),
+    # Prices from openrouter.ai/api/v1/models on 2026-10-14.
+    _ModelDef(
+        "openrouter/xiaomi/mimo-v2.6-flash",
+        "opencode",
+        "openrouter",
+        "xiaomi/mimo-v2.6-flash",
+        0.14,
+        0.28,
+        Tier.clay,
+        effort="low",
+    ),
+    _ModelDef(
+        "openrouter/z-ai/glm-5.3-flash",
+        "opencode",
+        "openrouter",
+        "z-ai/glm-5.3-flash",
+        0.036,
+        0.90,
+        Tier.clay,
+        effort="low",
+    ),
+    _ModelDef(
+        "openrouter/qwen/qwen3.8-27b",
+        "opencode",
+        "openrouter",
+        "qwen/qwen3.8-27b",
+        0.04,
+        2.30,
+        Tier.clay,
+        effort="low",
     ),
 )
 
@@ -314,6 +321,7 @@ def get_catalog() -> tuple[ModelSpec, ...]:
             input_cost=costs[0],
             output_cost=costs[1],
             tier=d.tier,
+            effort=d.effort,
         )
         for d in _MODEL_DEFS
         for costs in [_resolve_costs(d)]
