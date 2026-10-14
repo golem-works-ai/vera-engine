@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vera_engine.credentials import reject_credential_fields
-from vera_engine.models import Tier
+from vera_engine.models import Tier, validate_effort
 
-_VALID_EFFORTS = frozenset({"low", "medium", "high"})
 _VALID_STRATEGIES = frozenset({"env-key", "proxy", "none"})
 
 
@@ -23,7 +22,8 @@ class AgentRunRequest:
     prompt: str
     workspace: Path
     model: str | None = None
-    effort: str = "high"
+    # None means omitted: auto-selection may supply the qualified effort.
+    effort: str | None = None
     timeout_seconds: int = 2400
     extra_env: dict[str, str] = field(default_factory=dict)
     credential_strategy: str = "env-key"
@@ -41,10 +41,7 @@ class AgentRunRequest:
             raise ValueError("engine must not be empty")
         if not self.prompt:
             raise ValueError("prompt must not be empty")
-        if self.effort not in _VALID_EFFORTS:
-            raise ValueError(
-                f"effort must be one of {sorted(_VALID_EFFORTS)}, got {self.effort!r}"
-            )
+        validate_effort(self.effort)
         if self.credential_strategy not in _VALID_STRATEGIES:
             raise ValueError(
                 f"credential_strategy must be one of {sorted(_VALID_STRATEGIES)}, "

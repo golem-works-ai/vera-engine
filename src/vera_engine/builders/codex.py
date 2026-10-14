@@ -41,7 +41,7 @@ class CodexBuilder(EngineBuilder):
             # outside the workspace) and network, so full access is the only mode that works.
             argv.extend(["--sandbox", "danger-full-access"])
         # codex exec reads effort from -c model_reasoning_effort, not from a --effort flag.
-        argv.extend(["-c", f"model_reasoning_effort={request.effort}"])
+        argv.extend(["-c", f"model_reasoning_effort={request.effort or 'high'}"])
         # `-` makes codex exec read the instructions from stdin. The prompt
         # must not travel as an argv element: Linux rejects single arguments
         # of 131072+ bytes with E2BIG.

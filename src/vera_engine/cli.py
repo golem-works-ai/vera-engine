@@ -62,8 +62,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--effort",
-        default="high",
+        default=None,
         choices=["low", "medium", "high"],
+        help="Reasoning effort (default: selected model effort or engine default)",
     )
     run_parser.add_argument(
         "--workspace",
@@ -289,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = args.engine
     model = args.model
     strategy = args.strategy
+    effort = args.effort
 
     tier = Tier[args.tier] if args.tier else None
 
@@ -296,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
         sel = select_model(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
+        if effort is None:
+            effort = sel.model.effort
         if strategy is None:
             strategy = sel.strategy
         tier_label = f" tier={sel.model.tier.name}" if tier else ""
@@ -309,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         sel = select_cheapest(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
+        if effort is None:
+            effort = sel.model.effort
         if strategy is None:
             strategy = _resolve_strategy(engine)
         tier_label = f" tier={sel.model.tier.name}"
@@ -334,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         prompt=prompt,
         workspace=workspace,
         model=model,
-        effort=args.effort,
+        effort=effort,
         timeout_seconds=args.timeout,
         credential_strategy=strategy,
         tier=tier,

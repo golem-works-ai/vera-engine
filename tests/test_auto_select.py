@@ -21,7 +21,7 @@ from vera_engine.config import EngineConfig
 from vera_engine.invocation import RunResult
 from vera_engine.models import ModelSpec, Tier, get_catalog
 from vera_engine.request import AgentRunRequest
-from vera_engine.selection import list_engines
+from vera_engine.selection import get_builder, list_engines
 
 
 def _cap(provider, available=True, pct=None, usd=None, detail="", auth="api-key"):
@@ -646,7 +646,7 @@ def test_build_and_run_resolves_missing_engine(tmp_path, monkeypatch):
             prompt="hi",
             workspace=tmp_path,
             tier=Tier.clay,
-            credential_strategy="none",
+            credential_strategy="env-key",
         )
     )
     assert "invocation" in captured
@@ -677,10 +677,46 @@ def test_build_and_run_forwards_builder_for_session_id(tmp_path, monkeypatch):
             prompt="hi",
             workspace=tmp_path,
             tier=Tier.clay,
-            credential_strategy="none",
+            credential_strategy="env-key",
             structured_output=True,
         )
     )
     # The builder must be forwarded so RunResult.session_id can be populated.
     assert captured["builder"] is not None
     assert captured["builder"].engine_name == captured["invocation"].engine
+
+
+@pytest.mark.parametrize("probe", [False, True])
+@pytest.mark.parametrize("explicit", [None, "high", "medium", "low"])
+def test_auto_selected_effort_reaches_builder(tmp_path, monkeypatch, probe, explicit):
+    spec = ModelSpec(
+        "openrouter/xiaomi/mimo-v2.6-flash", "opencode", "openrouter",
+        0.14, 0.28, Tier.clay, effort="low",
+    )
+    monkeypatch.setattr("vera_engine.auto_select.get_catalog", lambda: (spec,))
+    monkeypatch.setattr("vera_engine.auto_select.check_all", lambda: _all_healthy())
+    req = AgentRunRequest(
+        engine=None, prompt="x", workspace=tmp_path, tier=Tier.clay, effort=explicit,
+    )
+    resolved = resolve_request(req, _uniform_config(), probe=probe)
+    assert resolved.effort == (explicit or "low")
+    invocation = get_builder(resolved.engine).build_invocation(resolved, "env-key")
+    assert invocation.argv[invocation.argv.index("--variant") + 1] == (explicit or "low")
+
+
+@pytest.mark.parametrize("engine", ["codex", "claude-code", "grok", "opencode"])
+def test_unqualified_effort_retains_engine_default(tmp_path, monkeypatch, engine):
+    spec = ModelSpec("test", engine, "openai", 1.0, 2.0, Tier.clay)
+    monkeypatch.setattr("vera_engine.auto_select.get_catalog", lambda: (spec,))
+    req = AgentRunRequest(engine=None, prompt="x", workspace=tmp_path)
+    resolved = resolve_request(req, _uniform_config())
+    assert resolved.effort is None
+    invocation = get_builder(engine).build_invocation(resolved, "env-key")
+    if engine == "codex":
+        assert "model_reasoning_effort=high" in invocation.argv
+    elif engine == "grok":
+        assert invocation.argv[invocation.argv.index("--reasoning-effort") + 1] == "high"
+    elif engine == "claude-code":
+        assert invocation.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+    else:
+        assert "--variant" not in invocation.argv

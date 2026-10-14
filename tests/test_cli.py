@@ -42,7 +42,7 @@ def test_parser_run_defaults():
     assert args.prompt == "hi"
     assert args.model is None
     assert args.tier is None
-    assert args.effort == "high"
+    assert args.effort is None
     assert args.workspace == Path(".")
     assert args.timeout == 2400
     assert args.strategy is None
@@ -1004,3 +1004,34 @@ def test_main_run_auto_select_explicit_strategy_not_overwritten(
     assert captured["invocation"].env["OPENAI_API_KEY"] == SecretRef(
         "OPENAI_API_KEY"
     )
+
+
+@pytest.mark.parametrize("pinned_engine", [False, True])
+@pytest.mark.parametrize("explicit", [None, "high"])
+def test_cli_auto_selected_effort(tmp_path, monkeypatch, pinned_engine, explicit):
+    spec = ModelSpec(
+        "openrouter/xiaomi/mimo-v2.6-flash", "opencode", "openrouter",
+        0.14, 0.28, Tier.clay, effort="low",
+    )
+    selection = Selection(model=spec, strategy="env-key", effective_cost=0.168)
+    captured = {}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("vera_engine.cli.select_model", lambda *a, **k: selection)
+    monkeypatch.setattr("vera_engine.cli.select_cheapest", lambda *a, **k: selection)
+
+    def fake_render(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        return RunResult(
+            returncode=0, stdout="", stderr="", timed_out=False,
+            engine=invocation.engine, argv=invocation.argv,
+        )
+
+    monkeypatch.setattr("vera_engine.cli.render_local", fake_render)
+    args = ["run", "--prompt", "hi", "--tier", "clay", "--workspace", str(tmp_path)]
+    if pinned_engine:
+        args += ["--engine", "opencode"]
+    if explicit:
+        args += ["--effort", explicit]
+    assert main(args) == 0
+    argv = captured["invocation"].argv
+    assert argv[argv.index("--variant") + 1] == (explicit or "low")
