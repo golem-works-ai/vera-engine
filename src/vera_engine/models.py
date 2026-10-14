@@ -116,6 +116,15 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         5.0,
         Tier.clay,
     ),
+    _ModelDef(
+        "claude-haiku-5-5",
+        "claude-code",
+        "anthropic",
+        "anthropic/claude-haiku-5.5",
+        0.10,
+        0.50,
+        Tier.clay,
+    ),
     # OpenAI via codex
     # Prices from openrouter.ai/api/v1/models on 2026-10-11. The codex CLI on a
     # ChatGPT account accepts gpt-6-sol/luna/astra, not gpt-6.1-*.
