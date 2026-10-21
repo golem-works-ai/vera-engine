@@ -1,4 +1,4 @@
-# vera-template-version: 2026.10.13.1
+# vera-template-version: 2026.10.21.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -179,7 +179,7 @@ jobs:
             RESPONSE=$(curl -sS --max-time 30 -D "${HEADER_FILE}" -w $'\n%{http_code}' \
               -X POST "${VERA_API_URL}/internal/jobs/credentials" \
               -H "Content-Type: application/json" \
-              -d "{\"job_id\": \"${VERA_JOB_ID}\", \"token\": \"${VERA_CALLBACK_TOKEN}\", \"github_actions_run_url\": \"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}") || RESPONSE=$'\n000'
+              -d "{\"job_id\": \"${VERA_JOB_ID}\", \"token\": \"${VERA_CALLBACK_TOKEN}\", \"github_actions_run_url\": \"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\", \"github_actions_run_attempt\": ${GITHUB_RUN_ATTEMPT}}") || RESPONSE=$'\n000'
             HTTP_CODE=$(printf '%s' "$RESPONSE" | tail -n1)
             BODY=$(printf '%s' "$RESPONSE" | sed '$d')
             # One observability line per attempt so the cadence is visible
@@ -201,11 +201,11 @@ jobs:
               vera_creds_backoff
               continue
             fi
-            # Issue #3847: a 409 with code=credentials_already_issued means
-            # another runner already won the race and is doing the work. The
-            # job is not failed — it is owned by the winner. Mirror the 410
-            # graceful path so the loser exits 0 instead of failing the
-            # workflow and overwriting the winner's terminal state.
+            # Issue #3847: a 409 with code=credentials_already_issued means a
+            # different run/attempt won the race (#8340: this same run/attempt
+            # retrying gets 200 instead). The job is not failed — it is owned
+            # by the winner. Mirror the 410 path so the loser exits 0 instead
+            # of failing the workflow and overwriting the winner's state.
             if [ "$HTTP_CODE" = "409" ] && \
                [ "$(printf '%s' "$BODY" | jq -r '.code // empty' 2>/dev/null)" = "credentials_already_issued" ]; then
               echo "vera-creds: another runner already owns this job; exiting gracefully"
@@ -304,75 +304,32 @@ jobs:
         id: expose_runner_secrets
         if: env.VERA_RUNNER_SECRET_NAMES != ''
         env:
-          # Only this workflow's own GitHub Actions runtime can read
-          # `secrets.*` (#7420) — the server ships declared names, never
-          # values, via VERA_RUNNER_SECRET_NAMES (set by the "Fetch job
-          # package" step's $GITHUB_ENV write above). `toJSON(secrets)`
-          # necessarily resolves every repo secret into this step's env, not
-          # just the declared ones — Actions has no dynamic `secrets[name]`
-          # lookup for an arbitrary runtime name. The `jq` filter below picks
-          # out only the declared names before anything reaches
-          # `$GITHUB_ENV`, so only those values ever leave this step. The
-          # `if:` above means this expression is never evaluated for jobs
-          # that declare nothing.
-          ALL_SECRETS: ${{ toJSON(secrets) }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Anchors this mapping so it is never null when no names are
+          # declared below — GITHUB_TOKEN is the automatic token, not a
+          # customer secret, so this carries no access of its own.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # vera:runner-secrets-env
+          # WorkflowManager.render_workflow() inserts one
+          # `VERA_RUNNER_SECRET__<NAME>: ${{ secrets.<NAME> }}` line per name
+          # this repo's default-branch .vera/settings.yaml declares in
+          # `runner_secrets`, at sync time (#8432). Static per-name refs,
+          # not a blanket all-secrets resolve — a name absent here was never
+          # granted this step's env at all, rather than merely filtered out
+          # of a blanket resolve after the fact.
         run: |
           if [ -z "${VERA_RUNNER_SECRET_NAMES:-}" ]; then
             exit 0
           fi
-          # Cross-check (#7700): the server names which secrets to export, but
-          # a compromised server must not be able to request an arbitrary repo
-          # secret — so every requested name must also appear in the DEFAULT
-          # branch's own .vera/settings.yaml. Deliberately never the PR head's
-          # settings.yaml: a malicious PR must not be able to expand its own
-          # access by editing its own settings file.
-          # VERA_DEFAULT_BRANCH_SETTINGS is a test seam only: when set, it is
-          # treated as the literal YAML content of the default branch's
-          # .vera/settings.yaml and the API call below is skipped.
-          if [ -n "${VERA_DEFAULT_BRANCH_SETTINGS:-}" ]; then
-            default_branch_settings="$VERA_DEFAULT_BRANCH_SETTINGS"
-          else
-            default_branch_settings=$(
-              gh api "repos/$GITHUB_REPOSITORY/contents/.vera/settings.yaml?ref=$DEFAULT_BRANCH" \
-                --jq '.content' 2>/dev/null | base64 -d 2>/dev/null
-            ) || default_branch_settings=""
-          fi
-          # A missing/unreadable settings file means an empty allow-list —
-          # refuse every requested name, never silently allow everything.
-          # `awk`, not a YAML parser: `yq` is absent from vera-runners and
-          # PyYAML is not importable before `uv sync` (same constraint as
-          # scripts/ci/stage_gate.sh). `runner_secrets` is a flat top-level
-          # list, so a block-scoped extraction is enough.
-          allowed_names=$(
-            printf '%s' "$default_branch_settings" | awk '
-              /^runner_secrets:[[:space:]]*(#.*)?$/ { in_list = 1; next }
-              in_list && /^[[:space:]]*(#.*)?$/ { next }
-              in_list && /^[[:space:]]*-/ {
-                line = $0
-                sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-                sub(/[[:space:]]*#.*$/, "", line)
-                gsub(/^[\x27"]|[\x27"][[:space:]]*$/, "", line)
-                gsub(/[[:space:]]+$/, "", line)
-                print line
-                next
-              }
-              in_list { in_list = 0 }
-            '
-          )
           while IFS= read -r name; do
             [ -z "$name" ] && continue
-            if ! grep -qxF "$name" <<< "$allowed_names"; then
-              echo "::error::runner secret ${name} was requested by the server but is not listed in runner_secrets on the default branch .vera/settings.yaml"
-              printf 'step_failure_reason=%s\n' "runner secret ${name} was requested by the server but is not listed in runner_secrets on the default branch .vera/settings.yaml" \
+            var="VERA_RUNNER_SECRET__${name}"
+            if [ -z "${!var+x}" ]; then
+              echo "::error::runner secret ${name} is not referenced by this repository's vera.yml — use the resync-workflow trigger to pick up the current .vera/settings.yaml runner_secrets list"
+              printf 'step_failure_reason=%s\n' "runner secret ${name} is not referenced by this repository's vera.yml — use the resync-workflow trigger to pick up the current .vera/settings.yaml runner_secrets list" \
                 >> "$GITHUB_OUTPUT"
               exit 1
             fi
-          done < <(printf '%s' "$VERA_RUNNER_SECRET_NAMES" | jq -r '.[]')
-          while IFS= read -r name; do
-            [ -z "$name" ] && continue
-            value=$(printf '%s' "$ALL_SECRETS" | jq -r --arg k "$name" '.[$k] // empty')
+            value="${!var}"
             if [ -z "$value" ]; then
               echo "::error::runner secret ${name} is declared in .vera/settings.yaml but not set in this repository's secrets"
               printf 'step_failure_reason=%s\n' "runner secret ${name} is declared in .vera/settings.yaml but not set in this repository's secrets" \
@@ -815,7 +772,9 @@ jobs:
       - name: Upload agent diagnostics
         # The agent's last tool calls and precommit log tails (#7442). The exec
         # script redacts secrets before writing here: artifacts are never masked.
+        # Best effort: a storage quota error must not turn a passing run red (#8390).
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: vera-agent-output
