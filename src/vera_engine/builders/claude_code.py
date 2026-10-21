@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder
+from vera_engine.builders.base import EngineBuilder, parse_usage_report_json
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
 _EFFORT_MAP = {
@@ -96,3 +96,15 @@ class ClaudeCodeBuilder(EngineBuilder):
         if isinstance(sid, str) and sid:
             return sid
         return None
+
+    def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+        """Parse the cost/usage envelope emitted by ``claude --output-format json``.
+
+        Field names follow the Claude Code streaming-JSON envelope schema as
+        documented by Anthropic's ``claude`` CLI: the top-level object carries
+        ``total_cost_usd`` (float), ``usage`` (per-run token counts), and
+        ``modelUsage`` (per-model cost/token breakdown). ``session_id`` is
+        read separately by :meth:`parse_session_id`. Delegates to the shared
+        :func:`parse_usage_report_json` so the parsing stays in one place.
+        """
+        return parse_usage_report_json(stdout, engine=self.engine_name)

@@ -1,11 +1,16 @@
 """Tests for EngineInvocation, MaterializedFile, and RunResult."""
 
-from pathlib import Path
+from dataclasses import FrozenInstanceError
 
 import pytest
 
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
+from vera_engine.invocation import (
+    EngineInvocation,
+    EngineUsageReport,
+    MaterializedFile,
+    RunResult,
+)
 
 
 def test_materialized_file_defaults():
@@ -53,7 +58,11 @@ def test_engine_invocation_valid_construction(tmp_path):
 @pytest.mark.parametrize("strategy", ["hermetic", "shared", "real"])
 def test_engine_invocation_valid_home_strategies(tmp_path, strategy):
     inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy=strategy
+        engine="codex",
+        argv=("codex",),
+        env={},
+        workdir=tmp_path,
+        home_strategy=strategy,
     )
     assert inv.home_strategy == strategy
 
@@ -61,7 +70,11 @@ def test_engine_invocation_valid_home_strategies(tmp_path, strategy):
 def test_engine_invocation_invalid_home_strategy_raises(tmp_path):
     with pytest.raises(ValueError, match="home_strategy must be one of"):
         EngineInvocation(
-            engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy="magic"
+            engine="codex",
+            argv=("codex",),
+            env={},
+            workdir=tmp_path,
+            home_strategy="magic",
         )
 
 
@@ -87,42 +100,67 @@ def test_engine_invocation_with_files_and_prompt_path(tmp_path):
 
 def test_engine_invocation_is_frozen(tmp_path):
     inv = EngineInvocation(engine="codex", argv=("codex",), env={}, workdir=tmp_path)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         inv.engine = "other"
 
 
 def test_run_result_succeeded_true_on_zero_returncode():
     result = RunResult(
-        returncode=0, stdout="ok", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="ok",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is True
 
 
 def test_run_result_succeeded_false_on_nonzero_returncode():
     result = RunResult(
-        returncode=1, stdout="", stderr="err", timed_out=False, engine="codex", argv=("codex",)
+        returncode=1,
+        stdout="",
+        stderr="err",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is False
 
 
 def test_run_result_succeeded_false_on_timeout_even_with_zero_returncode():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=True, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=True,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.succeeded is False
 
 
 def test_run_result_is_frozen():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         result.returncode = 1
 
 
 def test_run_result_session_id_defaults_to_none():
     result = RunResult(
-        returncode=0, stdout="", stderr="", timed_out=False, engine="codex", argv=("codex",)
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
     )
     assert result.session_id is None
 
@@ -141,9 +179,7 @@ def test_run_result_session_id_stored():
 
 
 def test_engine_invocation_resume_defaults_to_none(tmp_path):
-    inv = EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path
-    )
+    inv = EngineInvocation(engine="codex", argv=("codex",), env={}, workdir=tmp_path)
     assert inv.resume is None
 
 
@@ -156,3 +192,66 @@ def test_engine_invocation_resume_stored(tmp_path):
         resume="abc-123",
     )
     assert inv.resume == "abc-123"
+
+
+# --- EngineUsageReport ---
+
+
+def test_engine_usage_report_defaults_to_none():
+    report = EngineUsageReport()
+    assert report.total_cost_usd is None
+    assert report.usage is None
+    assert report.model_usage is None
+
+
+def test_engine_usage_report_stores_fields():
+    report = EngineUsageReport(
+        total_cost_usd=0.0123,
+        usage={"input_tokens": 10, "output_tokens": 5},
+        model_usage={"grok-4.6": {"cost": 0.0123, "tokens": 15}},
+    )
+    assert report.total_cost_usd == 0.0123
+    assert report.usage == {"input_tokens": 10, "output_tokens": 5}
+    assert report.model_usage == {"grok-4.6": {"cost": 0.0123, "tokens": 15}}
+
+
+def test_engine_usage_report_is_frozen():
+    report = EngineUsageReport(total_cost_usd=1.0)
+    with pytest.raises(FrozenInstanceError):
+        report.total_cost_usd = 2.0
+
+
+def test_engine_usage_report_passes_credential_guard():
+    # Construction at import time would have raised via reject_credential_fields;
+    # building an instance confirms the guard accepted the dataclass shape.
+    assert EngineUsageReport() is not None
+
+
+# --- RunResult.usage_report ---
+
+
+def test_run_result_usage_report_defaults_to_none():
+    result = RunResult(
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
+    )
+    assert result.usage_report is None
+
+
+def test_run_result_usage_report_stored():
+    report = EngineUsageReport(total_cost_usd=0.5)
+    result = RunResult(
+        returncode=0,
+        stdout="",
+        stderr="",
+        timed_out=False,
+        engine="codex",
+        argv=("codex",),
+        usage_report=report,
+    )
+    assert result.usage_report is report
+    assert result.usage_report.total_cost_usd == 0.5

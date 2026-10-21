@@ -52,6 +52,16 @@ python -m vera_engine run --engine claude-code --resume <session_id> --prompt "n
 A resume that exits non-zero fails fast (`ResumeFailedError`) rather than
 returning empty output — the session id is likely invalid or stale.
 
+### Cost & usage reporting
+
+Pair `--structured-output` with `claude-code` or `grok` and the layer also
+parses the cost/usage JSON the CLI emits, returning it on
+`RunResult.usage_report` as an `EngineUsageReport` (`total_cost_usd`,
+`usage`, `model_usage` — any may be `None` when the CLI omitted it). This
+matters for subscription-OAuth runs, which bypass the LLM proxy and would
+otherwise be invisible to cost dashboards. Non-structured runs, and the
+`codex`/`opencode` engines, leave `usage_report` as `None`.
+
 ### Model costs
 
 `python -m vera_engine models` shows the same effective costs used by

@@ -18,7 +18,9 @@ _OAUTH_DEFAULT_RATIO = 0.1
 
 
 def _is_opencode_anthropic(spec: ModelSpec) -> bool:
-    return spec.engine == "opencode" and spec.model_id.startswith("openrouter/anthropic/")
+    return spec.engine == "opencode" and spec.model_id.startswith(
+        "openrouter/anthropic/"
+    )
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,9 @@ def qualifying_models(
     process cannot disagree because a price moved. Default ``None`` keeps ``get_catalog()``.
     """
     if engine is not None and engines is not None and engine not in engines:
-        raise ValueError(f"engine {engine!r} is not in engines allowlist {sorted(engines)}")
+        raise ValueError(
+            f"engine {engine!r} is not in engines allowlist {sorted(engines)}"
+        )
 
     excluded = exclude or set()
     rows = catalog if catalog is not None else get_catalog()
@@ -67,7 +71,9 @@ def qualifying_models(
             continue
         if tier is not None and spec.tier < tier:
             continue
-        effective = spec.effective_cost(config.cost_ratio(spec.provider), config.input_weight)
+        effective = spec.effective_cost(
+            config.cost_ratio(spec.provider), config.input_weight
+        )
         candidates.append((effective, spec.model_id, spec))
 
     candidates.sort()
@@ -189,7 +195,9 @@ def select_model(
         detail = {p: c.detail for p, c in capacities.items()}
         raise ValueError(f"no usable model found (capacity: {detail})")
 
-    candidates.sort(key=lambda spec: (selection_cost(spec, config, capacities), spec.model_id))
+    candidates.sort(
+        key=lambda spec: (selection_cost(spec, config, capacities), spec.model_id)
+    )
     spec = candidates[0]
     cost = selection_cost(spec, config, capacities)
     cap = capacities.get(spec.provider)

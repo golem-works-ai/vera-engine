@@ -54,7 +54,9 @@ def fetch_openrouter_pricing() -> dict[str, dict[str, float]]:
     return _parse_models(payload)
 
 
-def get_openrouter_pricing(*, force: bool = False) -> dict[str, dict[str, float]] | None:
+def get_openrouter_pricing(
+    *, force: bool = False
+) -> dict[str, dict[str, float]] | None:
     """Return cached pricing, refreshing if stale. None if never fetched."""
     global _cache, _cache_expires_at
     now = time.monotonic()
@@ -62,7 +64,7 @@ def get_openrouter_pricing(*, force: bool = False) -> dict[str, dict[str, float]
         return _cache
     try:
         prices = fetch_openrouter_pricing()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("OpenRouter pricing fetch failed: %s", exc)
         return _cache
     if not prices:
