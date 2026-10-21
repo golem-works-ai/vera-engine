@@ -2,7 +2,14 @@
 
 import pytest
 
-from vera_engine.models import CATALOG, ModelSpec, PROVIDER_CREDENTIALS, Tier, TIER_NAMES, get_catalog
+from vera_engine.models import (
+    CATALOG,
+    PROVIDER_CREDENTIALS,
+    TIER_NAMES,
+    ModelSpec,
+    Tier,
+    get_catalog,
+)
 
 
 def test_model_spec_blended_cost():
@@ -44,7 +51,9 @@ def test_get_catalog_returns_specs():
 def test_all_catalog_providers_have_credentials():
     providers = {s.provider for s in CATALOG}
     for p in providers:
-        assert p in PROVIDER_CREDENTIALS, f"provider {p!r} missing from PROVIDER_CREDENTIALS"
+        assert p in PROVIDER_CREDENTIALS, (
+            f"provider {p!r} missing from PROVIDER_CREDENTIALS"
+        )
 
 
 def test_all_catalog_costs_positive():
@@ -58,8 +67,8 @@ def test_model_ids_unique():
     assert len(ids) == len(set(ids)), f"duplicate model IDs: {ids}"
 
 
-def test_catalog_has_direct_grok_46():
-    rows = [s for s in get_catalog() if s.model_id == "grok-4.6"]
+def test_catalog_has_direct_grok_47():
+    rows = [s for s in get_catalog() if s.model_id == "grok-4.7"]
     assert len(rows) == 1
     spec = rows[0]
     assert spec.engine == "grok"
@@ -76,3 +85,14 @@ def test_catalog_has_no_grok_45():
 
 def test_xai_provider_credential_is_xai_api_key():
     assert PROVIDER_CREDENTIALS["xai"] == "XAI_API_KEY"
+
+
+def test_catalog_has_gpt6_codex_and_openrouter_rows():
+    by_id = {s.model_id: s for s in get_catalog()}
+    assert by_id["gpt-6-sol"].engine == "codex"
+    assert by_id["gpt-6-luna"].engine == "codex"
+    assert by_id["gpt-6-astra"].tier == Tier.iron
+    assert by_id["openrouter/openai/gpt-6.1-sol"].engine == "opencode"
+    assert by_id["openrouter/openai/gpt-6-luna"].engine == "opencode"
+    assert "gpt-5.6-sol" not in by_id
+    assert "gpt-5.6-terra" in by_id

@@ -1,7 +1,8 @@
 """Collect remaining capacity from each provider.
 
 OpenRouter: REST API for credit balance.
-Anthropic (Claude Code): parse ``claude -p "/usage"`` output.
+Anthropic: 1-token Haiku ``POST /v1/messages`` and parse
+``anthropic-ratelimit-unified-{5h,7d}-*`` response headers.
 xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
 ``grok models`` is the fallback when tmux or ``/usage`` cannot produce a percent.
 OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
@@ -16,6 +17,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -42,16 +44,22 @@ class ProviderCapacity:
 
     @property
     def usage_pressure(self) -> float | None:
-        """Return quota-use pressure relative to elapsed subscription time."""
-        if self.token_used_pct is None or self.window_used_pct is None:
+        """Return remaining-quota pressure relative to elapsed window time."""
+        if self.window_used_pct is None:
             return None
-        token_used = self.token_used_pct / 100
-        time_used = self.window_used_pct / 100
-        return token_used / (time_used * 0.7 + 0.25)
+        if self.remaining_pct is not None:
+            remaining_pct = self.remaining_pct
+        elif self.token_used_pct is not None:
+            remaining_pct = 100.0 - self.token_used_pct
+        else:
+            return None
+        return _usage_pressure(remaining_pct, self.window_used_pct)
 
 
 def check_openrouter() -> ProviderCapacity:
-    key = os.environ.get("OPENROUTER_API_KEY")
+    key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
+        "PROXY_OPENROUTER_API_KEY"
+    )
     if not key:
         return ProviderCapacity("openrouter", available=False, detail="no key")
     try:
@@ -74,9 +82,11 @@ def check_openrouter() -> ProviderCapacity:
             remaining_usd=remaining,
             detail=f"${remaining:.2f} remaining",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("OpenRouter credits check failed: %s", exc)
-        return ProviderCapacity("openrouter", available=bool(key), detail=f"check failed: {exc}")
+        return ProviderCapacity(
+            "openrouter", available=bool(key), detail=f"check failed: {exc}"
+        )
 
 
 _SUBSCRIPTION_MIN_PCT = 5.0
@@ -86,13 +96,15 @@ def _prefer_subscription(cap: ProviderCapacity) -> bool:
     """True when a live subscription should beat an API key."""
     if not cap.available or cap.auth_method != "oauth":
         return False
-    if cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT:
-        return False
-    return True
+    return not (
+        cap.remaining_pct is not None and cap.remaining_pct < _SUBSCRIPTION_MIN_PCT
+    )
 
 
 def _api_key_capacity(provider: str) -> ProviderCapacity:
-    return ProviderCapacity(provider, available=True, detail="API key set", auth_method="api-key")
+    return ProviderCapacity(
+        provider, available=True, detail="API key set", auth_method="api-key"
+    )
 
 
 def check_anthropic() -> ProviderCapacity:
@@ -104,65 +116,191 @@ def check_anthropic() -> ProviderCapacity:
     return sub
 
 
-_RAW_OUTPUT_LOG_CHARS = 2000
+# Vera runners set ANTHROPIC_BASE_URL to the internal proxy, which 401s
+# setup-tokens. This probe must hit Anthropic directly.
+_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_HAIKU_PROBE_MODEL = "claude-haiku-4-5-20251001"
+_ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
+_CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+_PRESSURE_SLOPE = 0.9
+_PRESSURE_FLOOR = 0.05
+_ALLOWED_UNIFIED_STATUSES = frozenset({"allowed", "allowed_warning"})
+_UNIFIED_WINDOWS = (
+    ("5h", "session", timedelta(hours=5)),
+    ("7d", "week", timedelta(days=7)),
+)
 
 
-def _log_raw_probe_failure(reason: str, exit_code: int, stdout: str, stderr: str) -> None:
-    """Log the full `/usage` transcript so a non-available verdict is never a mystery.
+def _usage_pressure(remaining_pct: float, window_used_pct: float) -> float:
+    """remaining_frac / (elapsed_frac * 0.9 + 0.05). Higher is healthier."""
+    remaining = remaining_pct / 100.0
+    time_used = window_used_pct / 100.0
+    return remaining / (time_used * _PRESSURE_SLOPE + _PRESSURE_FLOOR)
 
-    Substring parsing of CLI output cannot tell "genuinely no subscription"
-    apart from "the CLI silently no-op'd" (see the zero-usage fingerprint in
-    ``_parse_claude_usage``) without the raw bytes. Reproduced 2026-08-27
-    (vera#7103): both were logged as identical one-line details with no way
-    to tell them apart after the fact.
-    """
-    logger.warning(
-        "anthropic usage probe non-available (%s): exit=%d stdout=%r stderr=%r",
-        reason,
-        exit_code,
-        stdout[:_RAW_OUTPUT_LOG_CHARS],
-        stderr[:_RAW_OUTPUT_LOG_CHARS],
+
+def _anthropic_oauth_token() -> str | None:
+    env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        data = json.loads(_CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    oauth = data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None
+    token = oauth.get("accessToken")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def _urlopen(req: urllib.request.Request, timeout: float) -> object:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)
+
+
+def _post_anthropic_messages(token: str) -> tuple[int, object]:
+    body = json.dumps(
+        {
+            "model": _HAIKU_PROBE_MODEL,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    ).encode()
+    req = urllib.request.Request(
+        _ANTHROPIC_MESSAGES_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "User-Agent": "vera-engine",
+        },
     )
+    try:
+        with _urlopen(req, timeout=_ANTHROPIC_PROBE_TIMEOUT_SECONDS) as resp:
+            return int(resp.status), resp.headers
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.headers
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
-    """Parse `claude -p "/usage"` for subscription remaining capacity."""
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "/usage"],
-            capture_output=True,
-            text=True,
-            timeout=15,
+    """Probe Anthropic subscription remaining via unified rate-limit headers."""
+    token = _anthropic_oauth_token()
+    if not token:
+        return ProviderCapacity(
+            "anthropic", available=False, detail="not on subscription"
         )
-        if result.returncode != 0:
-            _log_raw_probe_failure(
-                "nonzero exit", result.returncode, result.stdout, result.stderr
-            )
-            return ProviderCapacity("anthropic", available=False, detail="claude not available")
-        capacity = _parse_claude_usage(result.stdout)
-        if not capacity.available:
-            _log_raw_probe_failure(
-                capacity.detail, result.returncode, result.stdout, result.stderr
-            )
-        return capacity
-    except FileNotFoundError:
-        return ProviderCapacity("anthropic", available=False, detail="claude CLI not found")
-    except subprocess.TimeoutExpired:
-        return ProviderCapacity("anthropic", available=False, detail="claude usage check timed out")
-    except Exception as exc:
-        logger.warning("Claude usage check failed: %s", exc)
-        return ProviderCapacity("anthropic", available=False, detail=f"check failed: {exc}")
+    try:
+        status, headers = _post_anthropic_messages(token)
+    except TimeoutError:
+        return ProviderCapacity(
+            "anthropic", available=False, detail="anthropic usage check timed out"
+        )
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
+        logger.warning("Anthropic usage check failed: %s", exc)
+        return ProviderCapacity(
+            "anthropic", available=False, detail=f"check failed: {exc}"
+        )
+    if status in (401, 403):
+        return ProviderCapacity(
+            "anthropic", available=False, detail="not on subscription"
+        )
+    if status not in (200, 429):
+        return ProviderCapacity(
+            "anthropic",
+            available=False,
+            detail=f"anthropic usage check HTTP {status}",
+        )
+    cap = _parse_anthropic_rate_headers(headers)
+    logger.info(
+        "anthropic header probe HTTP %s remaining_pct=%s window=%s",
+        status,
+        cap.remaining_pct,
+        cap.window_name,
+    )
+    return cap
 
 
-_ZERO_USAGE_FINGERPRINT_RE = re.compile(r"Total cost:\s+\$0\.0000")
-_SESSION_PCT_RE = re.compile(r"Current session:\s*(\d+)%\s*used")
-_WEEK_PCT_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used")
-_CLAUDE_SESSION_RESET_RE = re.compile(
-    r"Current session:.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
-)
-_CLAUDE_WEEK_RESET_RE = re.compile(
-    r"Current week \(all models\):.*?resets\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{1,2}(?::\d{2})?[ap]m)\s+\(UTC\)"
-)
+def _header_map(headers: object) -> dict[str, str]:
+    if headers is None:
+        return {}
+    try:
+        items = headers.items()
+    except AttributeError:
+        return {}
+    return {str(key).lower(): str(value) for key, value in items}
+
+
+@dataclass(frozen=True)
+class _UnifiedWindow:
+    window_name: str
+    remaining_pct: float
+    token_used_pct: float
+    window_used_pct: float
+    status: str
+    pressure: float
+
+
+def _parse_anthropic_rate_headers(
+    headers: object, *, now: datetime | None = None
+) -> ProviderCapacity:
+    """Pick the most constrained 5h/7d window (lowest pressure)."""
+    mapped = _header_map(headers)
+    current_time = now or datetime.now(UTC)
+    readings: list[_UnifiedWindow] = []
+    for key, window_name, duration in _UNIFIED_WINDOWS:
+        prefix = f"anthropic-ratelimit-unified-{key}"
+        util_raw = mapped.get(f"{prefix}-utilization")
+        reset_raw = mapped.get(f"{prefix}-reset")
+        if util_raw is None or reset_raw is None:
+            continue
+        try:
+            utilization = float(util_raw)
+            reset_epoch = int(float(reset_raw))
+        except ValueError:
+            continue
+        remaining_pct = max(0.0, min(100.0, (1.0 - utilization) * 100.0))
+        reset_at = datetime.fromtimestamp(reset_epoch, tz=UTC)
+        window_used = _window_used_pct(reset_at, duration, current_time)
+        readings.append(
+            _UnifiedWindow(
+                window_name=window_name,
+                remaining_pct=remaining_pct,
+                token_used_pct=utilization * 100.0,
+                window_used_pct=window_used,
+                status=mapped.get(f"{prefix}-status", ""),
+                pressure=_usage_pressure(remaining_pct, window_used),
+            )
+        )
+
+    if not readings:
+        return ProviderCapacity(
+            "anthropic",
+            available=True,
+            detail="subscription active, usage unknown",
+            auth_method="oauth",
+        )
+
+    chosen = min(readings, key=lambda reading: reading.pressure)
+    parts = [
+        f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
+    ]
+    status_ok = (not chosen.status) or chosen.status in _ALLOWED_UNIFIED_STATUSES
+    return ProviderCapacity(
+        "anthropic",
+        available=chosen.remaining_pct > 2 and status_ok,
+        remaining_pct=chosen.remaining_pct,
+        detail=f"{', '.join(parts)} remaining",
+        auth_method="oauth",
+        token_used_pct=chosen.token_used_pct,
+        window_used_pct=chosen.window_used_pct,
+        window_name=chosen.window_name,
+    )
 
 
 def _window_used_pct(reset_at: datetime, duration: timedelta, now: datetime) -> float:
@@ -186,81 +324,6 @@ def _parse_reset(
     return _window_used_pct(reset_at, duration, now)
 
 
-def _parse_claude_usage(
-    output: str, *, now: datetime | None = None
-) -> ProviderCapacity:
-    if "subscription" not in output.lower():
-        raw = output[:_RAW_OUTPUT_LOG_CHARS]
-        if _ZERO_USAGE_FINGERPRINT_RE.search(output):
-            # Reproduced 2026-08-27 (vera#7103/#7104): a credentials.json
-            # written with accessToken only, no `scopes` array, makes the CLI
-            # silently skip the /usage turn -- exit 0, no stderr, this
-            # zero-cost session summary instead of an error or the report.
-            # A healthy token then reads identically to a dead one.
-            return ProviderCapacity(
-                "anthropic",
-                available=False,
-                detail=(
-                    "not on subscription (CLI returned a zero-usage session "
-                    f"summary instead of /usage output -- likely a broken "
-                    f"credential rather than a real subscription check: {raw!r})"
-                ),
-            )
-        return ProviderCapacity(
-            "anthropic", available=False, detail=f"not on subscription (raw: {raw!r})"
-        )
-
-    session_match = _SESSION_PCT_RE.search(output)
-    week_match = _WEEK_PCT_RE.search(output)
-
-    current_time = now or datetime.now(UTC)
-    session_used = float(session_match.group(1)) if session_match else None
-    week_used = float(week_match.group(1)) if week_match else None
-    session_remaining = 100 - session_used if session_used is not None else None
-    week_remaining = 100 - week_used if week_used is not None else None
-
-    if session_remaining is not None and week_remaining is not None:
-        remaining = min(session_remaining, week_remaining)
-    elif week_remaining is not None:
-        remaining = week_remaining
-    elif session_remaining is not None:
-        remaining = session_remaining
-    else:
-        return ProviderCapacity("anthropic", available=True, detail="subscription active, usage unknown", auth_method="oauth")
-
-    parts = []
-    if session_remaining is not None:
-        parts.append(f"session {session_remaining:.0f}%")
-    if week_remaining is not None:
-        parts.append(f"week {week_remaining:.0f}%")
-
-    limiting_window = max(
-        (
-            (session_used, "session", _CLAUDE_SESSION_RESET_RE, timedelta(hours=5)),
-            (week_used, "week", _CLAUDE_WEEK_RESET_RE, timedelta(days=7)),
-        ),
-        key=lambda value: value[0] if value[0] is not None else -1,
-    )
-    token_used, window_name, reset_re, duration = limiting_window
-    reset_match = reset_re.search(output)
-    window_used = (
-        _parse_reset(reset_match.group(1), "%b %d, %I:%M%p", now=current_time, duration=duration)
-        if reset_match is not None
-        else None
-    )
-
-    return ProviderCapacity(
-        "anthropic",
-        available=remaining > 2,
-        remaining_pct=float(remaining),
-        detail=f"{', '.join(parts)} remaining",
-        auth_method="oauth",
-        token_used_pct=token_used,
-        window_used_pct=window_used,
-        window_name=window_name,
-    )
-
-
 def check_openai() -> ProviderCapacity:
     key = os.environ.get("OPENAI_API_KEY")
     if key:
@@ -268,7 +331,9 @@ def check_openai() -> ProviderCapacity:
     cap = _check_codex_status()
     if cap is not None:
         return cap
-    return ProviderCapacity("openai", available=False, detail="no key and codex status unavailable")
+    return ProviderCapacity(
+        "openai", available=False, detail="no key and codex status unavailable"
+    )
 
 
 _TMUX_SESSION = "vera-engine-codex-status"
@@ -276,7 +341,9 @@ _CODEX_POLL_INTERVAL = 0.5
 _CODEX_STARTUP_TIMEOUT = 15.0
 _CODEX_STATUS_TIMEOUT = 10.0
 _WEEKLY_PCT_RE = re.compile(r"Weekly limit:\s*\[.*?\]\s*(\d+)%\s*left")
-_CODEX_RESET_RE = re.compile(r"Weekly limit:.*?\(resets\s+(\d{1,2}:\d{2})\s+on\s+(\d{1,2}\s+[A-Z][a-z]{2})\)")
+_CODEX_RESET_RE = re.compile(
+    r"Weekly limit:.*?\(resets\s+(\d{1,2}:\d{2})\s+on\s+(\d{1,2}\s+[A-Z][a-z]{2})\)"
+)
 _ACCOUNT_RE = re.compile(r"Account:\s*\S+\s*\((\w+)\)")
 
 
@@ -284,10 +351,13 @@ def _tmux_capture(session: str) -> str:
     try:
         r = subprocess.run(
             ["tmux", "capture-pane", "-t", session, "-p", "-S", "-80"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         return r.stdout if r.returncode == 0 else ""
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return ""
 
 
@@ -295,10 +365,12 @@ def _tmux_send(session: str, *keys: str) -> None:
     try:
         subprocess.run(
             ["tmux", "send-keys", "-t", session, *keys],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _tmux_send_literal(session: str, text: str) -> None:
@@ -306,20 +378,24 @@ def _tmux_send_literal(session: str, text: str) -> None:
     try:
         subprocess.run(
             ["tmux", "send-keys", "-t", session, "-l", text],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _tmux_kill(session: str) -> None:
     try:
         subprocess.run(
             ["tmux", "kill-session", "-t", session],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
+            check=False,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("tmux command failed for session %s", session, exc_info=True)
 
 
 def _check_codex_status() -> ProviderCapacity | None:
@@ -334,7 +410,9 @@ def _check_codex_status() -> ProviderCapacity | None:
     try:
         r = subprocess.run(
             ["tmux", "new-session", "-d", "-s", _TMUX_SESSION, "-x", "120", "-y", "40"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
+            check=False,
         )
         if r.returncode != 0:
             return None
@@ -351,7 +429,11 @@ def _check_codex_status() -> ProviderCapacity | None:
         while time.monotonic() < deadline:
             time.sleep(_CODEX_POLL_INTERVAL)
             buf = _tmux_capture(_TMUX_SESSION)
-            if not update_dismissed and "Update available" in buf and "Press enter" in buf:
+            if (
+                not update_dismissed
+                and "Update available" in buf
+                and "Press enter" in buf
+            ):
                 _tmux_send(_TMUX_SESSION, "Down", "Enter")
                 update_dismissed = True
                 continue
@@ -386,7 +468,7 @@ def _check_codex_status() -> ProviderCapacity | None:
 
         logger.debug("codex /status did not render in time")
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("codex status check failed: %s", exc)
         return None
     finally:
@@ -500,6 +582,7 @@ def _check_grok_usage() -> ProviderCapacity | None:
             capture_output=True,
             timeout=5,
             env=env,
+            check=False,
         )
         if r.returncode != 0:
             return None
@@ -539,7 +622,7 @@ def _check_grok_usage() -> ProviderCapacity | None:
 
         logger.debug("grok /usage did not render in time")
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("grok usage check failed: %s", exc)
         return None
     finally:
@@ -563,7 +646,9 @@ def _parse_grok_usage(
 
     plan = bar.group(1).strip() if bar else "unknown"
     remaining_pct = float(100 - int(bar.group(2))) if bar is not None else None
-    remaining_usd = float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+    remaining_usd = (
+        float(usd.group(2)) - float(usd.group(1)) if usd is not None else None
+    )
     reset_match = _GROK_RESET_RE.search(output)
     current_time = now or datetime.now(UTC)
     window_used = (
@@ -593,7 +678,9 @@ def _parse_grok_usage(
         remaining_usd=remaining_usd,
         detail=detail,
         auth_method="oauth",
-        token_used_pct=float(100 - remaining_pct) if remaining_pct is not None else None,
+        token_used_pct=float(100 - remaining_pct)
+        if remaining_pct is not None
+        else None,
         window_used_pct=window_used,
         window_name="week" if remaining_pct is not None else None,
     )
@@ -612,13 +699,16 @@ def _check_grok_models() -> ProviderCapacity:
             text=True,
             timeout=15,
             env=env,
+            check=False,
         )
         return _parse_grok_models(f"{result.stdout}\n{result.stderr}")
     except FileNotFoundError:
         return ProviderCapacity("xai", available=False, detail="grok CLI not found")
     except subprocess.TimeoutExpired:
-        return ProviderCapacity("xai", available=False, detail="grok models check timed out")
-    except Exception as exc:
+        return ProviderCapacity(
+            "xai", available=False, detail="grok models check timed out"
+        )
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("Grok models check failed: %s", exc)
         return ProviderCapacity("xai", available=False, detail=f"check failed: {exc}")
 

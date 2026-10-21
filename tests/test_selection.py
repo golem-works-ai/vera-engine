@@ -43,7 +43,9 @@ def test_get_builder_unknown_engine_raises():
 
 
 def test_get_builder_unknown_engine_lists_available():
-    with pytest.raises(ValueError, match=r"available:.*claude-code.*codex.*grok.*opencode"):
+    with pytest.raises(
+        ValueError, match=r"available:.*claude-code.*codex.*grok.*opencode"
+    ):
         get_builder("nonexistent")
 
 

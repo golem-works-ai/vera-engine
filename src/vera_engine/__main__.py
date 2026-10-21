@@ -1,6 +1,7 @@
 """Allow `python -m vera_engine`."""
 
-from vera_engine.cli import main
 import sys
+
+from vera_engine.cli import main
 
 sys.exit(main())

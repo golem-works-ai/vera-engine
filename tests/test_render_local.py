@@ -5,7 +5,7 @@ import os
 import pytest
 
 from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
-from vera_engine.invocation import EngineInvocation, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.render.local import (
     ResumeFailedError,
     _build_base_env,
@@ -15,7 +15,6 @@ from vera_engine.render.local import (
     _resolve_env,
     render_local,
 )
-
 
 # --- _resolve_env ---
 
@@ -77,7 +76,11 @@ def test_expand_vars_unresolved_reference_raises():
 
 def _inv(tmp_path, home_strategy="hermetic"):
     return EngineInvocation(
-        engine="codex", argv=("codex",), env={}, workdir=tmp_path, home_strategy=home_strategy
+        engine="codex",
+        argv=("codex",),
+        env={},
+        workdir=tmp_path,
+        home_strategy=home_strategy,
     )
 
 
@@ -187,7 +190,9 @@ def test_materialize_files_literal_dollar_when_expansion_off(tmp_path):
 
 
 def test_materialize_files_applies_mode(tmp_path):
-    files = (MaterializedFile(relative_path="script.sh", content="#!/bin/sh", mode=0o755),)
+    files = (
+        MaterializedFile(relative_path="script.sh", content="#!/bin/sh", mode=0o755),
+    )
     _materialize_files(files, tmp_path, {})
     assert (tmp_path / "script.sh").stat().st_mode & 0o777 == 0o755
 
@@ -229,7 +234,11 @@ def test_render_local_echo_success(tmp_path):
 
 def test_render_local_nonzero_exit(tmp_path):
     inv = EngineInvocation(
-        engine="false", argv=("false",), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="false",
+        argv=("false",),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode != 0
@@ -308,7 +317,11 @@ def test_render_local_shared_home_strategy_removed_after_run(tmp_path):
     # into the result; existence of the created HOME dir isn't directly observable
     # here, so this exercises the shared-strategy code path end to end.
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="shared"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="shared",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode == 0
@@ -327,6 +340,9 @@ class _FakeBuilder:
     def parse_session_id(self, stdout: str):
         return self._extract(stdout)
 
+    def parse_usage_report(self, stdout: str):
+        return None
+
 
 def test_render_local_parses_session_id_via_builder(tmp_path):
     inv = EngineInvocation(
@@ -343,7 +359,11 @@ def test_render_local_parses_session_id_via_builder(tmp_path):
 
 def test_render_local_no_builder_leaves_session_id_none(tmp_path):
     inv = EngineInvocation(
-        engine="echo", argv=("echo", "hi"), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.session_id is None
@@ -394,7 +414,11 @@ def test_render_local_resume_success_returns_session_id(tmp_path):
 
 def test_render_local_nonzero_without_resume_does_not_raise(tmp_path):
     inv = EngineInvocation(
-        engine="false", argv=("false",), env={}, workdir=tmp_path, home_strategy="hermetic"
+        engine="false",
+        argv=("false",),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
     )
     result = render_local(inv, CredentialBundle(values={}))
     assert result.returncode != 0
@@ -415,3 +439,93 @@ def test_resume_failed_error_carries_returncode_and_engine(tmp_path):
     assert exc_info.value.returncode == 3
     assert exc_info.value.engine == "sh"
     assert exc_info.value.resume == "dead"
+
+
+# --- render_local usage_report threading ---
+
+
+class _UsageBuilder:
+    """Builder double exposing both session_id and usage_report hooks."""
+
+    def __init__(self, report: EngineUsageReport | None) -> None:
+        self._report = report
+
+    def parse_session_id(self, stdout: str):
+        return None
+
+    def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+        return self._report
+
+
+def test_render_local_threads_usage_report_via_builder(tmp_path):
+    report = EngineUsageReport(total_cost_usd=0.25)
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", '{"total_cost_usd": 0.25}'),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    builder = _UsageBuilder(report)
+    result = render_local(inv, CredentialBundle(values={}), builder=builder)
+    assert result.usage_report is report
+
+
+def test_render_local_no_builder_leaves_usage_report_none(tmp_path):
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.usage_report is None
+
+
+def test_render_local_builder_returning_none_usage_report_keeps_none(tmp_path):
+    class _NoneReportBuilder:
+        def parse_session_id(self, stdout: str):
+            return None
+
+        def parse_usage_report(self, stdout: str):
+            return None
+
+    inv = EngineInvocation(
+        engine="echo",
+        argv=("echo", "hi"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    result = render_local(
+        inv, CredentialBundle(values={}), builder=_NoneReportBuilder()
+    )
+    assert result.usage_report is None
+
+
+def test_render_local_timeout_threads_usage_report_from_partial_stdout(tmp_path):
+    report = EngineUsageReport(total_cost_usd=0.01)
+
+    class _TimeoutUsageBuilder:
+        def parse_session_id(self, stdout: str):
+            return None
+
+        def parse_usage_report(self, stdout: str) -> EngineUsageReport | None:
+            return report
+
+    inv = EngineInvocation(
+        engine="sleep",
+        argv=("sleep", "5"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        timeout_seconds=1,
+    )
+    result = render_local(
+        inv, CredentialBundle(values={}), builder=_TimeoutUsageBuilder()
+    )
+    assert result.timed_out is True
+    # The timeout branch must call parse_usage_report on the captured stdout
+    # and thread the returned report onto the RunResult.
+    assert result.usage_report is report

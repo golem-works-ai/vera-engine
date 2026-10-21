@@ -50,11 +50,11 @@ Do not add a grok-4.5 catalog row.
 
 Native Grok is:
 
-- model `grok-4.6`
+- model `grok-4.7`
 - engine `grok`
 - provider `xai`
 
-OpenCode `openrouter/x-ai/grok-4.6` is a valid Grok fallback.
+OpenCode `openrouter/x-ai/grok-4.7` is a valid Grok fallback.
 
 Usage probe is tmux plus `/usage`. The weekly bar is used percent. Invert it for remaining. `grok -p /usage` starts an agent. Details live in `capacity.py`. Do not copy the probe algorithm here.
 
@@ -64,4 +64,4 @@ Usage probe is tmux plus `/usage`. The weekly bar is used percent. Invert it for
 
 Exception: explicit `--engine opencode --model openrouter/anthropic/…` may still work.
 
-Probe `claude -p /usage` even when `ANTHROPIC_API_KEY` is set.
+Probe Anthropic subscription via 1-token Haiku API call and `anthropic-ratelimit-unified-*` response headers. Prefer subscription over `ANTHROPIC_API_KEY`.

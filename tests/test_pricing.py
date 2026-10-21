@@ -5,8 +5,8 @@ from unittest.mock import patch
 import pytest
 
 from vera_engine.pricing import (
-    _per_mtok,
     _parse_models,
+    _per_mtok,
     openrouter_model_costs,
     reset_cache,
 )

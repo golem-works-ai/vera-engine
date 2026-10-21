@@ -5,12 +5,13 @@ import json
 import pytest
 
 from vera_engine.builders.base import EngineBuilder
-from vera_engine.builders.claude_code import ClaudeCodeBuilder, DEFAULT_PROMPT_FILENAME
+from vera_engine.builders.claude_code import DEFAULT_PROMPT_FILENAME, ClaudeCodeBuilder
 from vera_engine.builders.codex import CodexBuilder
 from vera_engine.builders.grok import DEFAULT_PROMPT_FILENAME as GROK_PROMPT_FILENAME
 from vera_engine.builders.grok import GrokBuilder
 from vera_engine.builders.opencode import OpenCodeBuilder
 from vera_engine.credentials import SecretRef
+from vera_engine.invocation import EngineUsageReport
 from vera_engine.request import AgentRunRequest
 
 
@@ -39,6 +40,39 @@ def test_all_builders_implement_parse_session_id(builder):
     assert builder.parse_session_id("") is None
 
 
+def test_parse_usage_report_default_none_on_base():
+    # A builder that implements only the abstract methods inherits the
+    # parse_usage_report default (returns None), so codex/opencode stay
+    # unaffected by the new hook.
+    class _Stub(EngineBuilder):
+        engine_name = "stub"
+        supported_strategies = frozenset({"none"})
+
+        def default_model(self):
+            return None
+
+        def build_invocation(self, request, strategy):
+            raise NotImplementedError
+
+        def parse_session_id(self, stdout):
+            return None
+
+    stub = _Stub()
+    assert stub.parse_usage_report('{"total_cost_usd": 1.0}') is None
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [OpenCodeBuilder(), CodexBuilder()],
+)
+def test_parse_usage_report_default_none_on_unsupported_builders(builder):
+    # Builders that do not override parse_usage_report must return None
+    # even on rich JSON output, so they stay unaffected.
+    stdout = '{"total_cost_usd": 0.1, "usage": {"input_tokens": 1}, "modelUsage": {}}'
+    assert builder.parse_usage_report(stdout) is None
+    assert builder.parse_usage_report("") is None
+
+
 # --- ClaudeCodeBuilder ---
 
 
@@ -52,7 +86,9 @@ def test_claude_code_default_model_is_none():
 
 
 def test_claude_code_env_key_strategy(tmp_path):
-    req = AgentRunRequest(engine="claude-code", prompt="do the thing", workspace=tmp_path)
+    req = AgentRunRequest(
+        engine="claude-code", prompt="do the thing", workspace=tmp_path
+    )
     inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
 
     expected_prompt_path = tmp_path / DEFAULT_PROMPT_FILENAME
@@ -70,7 +106,10 @@ def test_claude_code_env_key_strategy(tmp_path):
 
 def test_claude_code_proxy_strategy(tmp_path):
     req = AgentRunRequest(
-        engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="proxy"
+        engine="claude-code",
+        prompt="x",
+        workspace=tmp_path,
+        credential_strategy="proxy",
     )
     inv = ClaudeCodeBuilder().build_invocation(req, "proxy")
     assert inv.env["ANTHROPIC_API_KEY"] == SecretRef("ANTHROPIC_API_KEY")
@@ -78,7 +117,9 @@ def test_claude_code_proxy_strategy(tmp_path):
 
 
 def test_claude_code_none_strategy_uses_real_home(tmp_path):
-    req = AgentRunRequest(engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="none")
+    req = AgentRunRequest(
+        engine="claude-code", prompt="x", workspace=tmp_path, credential_strategy="none"
+    )
     inv = ClaudeCodeBuilder().build_invocation(req, "none")
     assert inv.home_strategy == "real"
     secret_refs = [v for v in inv.env.values() if isinstance(v, SecretRef)]
@@ -143,6 +184,81 @@ def test_claude_code_parse_session_id_none_on_missing_field():
     assert ClaudeCodeBuilder().parse_session_id('{"result": "ok"}') is None
 
 
+# --- ClaudeCodeBuilder.parse_usage_report ---
+
+
+def _claude_usage_stdout() -> str:
+    return json.dumps(
+        {
+            "session_id": "claude-sess-1",
+            "total_cost_usd": 0.0789,
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 80,
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 15,
+                "reasoning_tokens": 40,
+            },
+            "modelUsage": {
+                "claude-sonnet-4": {
+                    "cost": 0.0789,
+                    "inputTokens": 200,
+                    "outputTokens": 80,
+                    "provider": "anthropic",
+                }
+            },
+        }
+    )
+
+
+def test_claude_code_parse_usage_report_extracts_fields():
+    report = ClaudeCodeBuilder().parse_usage_report(_claude_usage_stdout())
+    assert isinstance(report, EngineUsageReport)
+    assert report.total_cost_usd == 0.0789
+    assert report.usage == {
+        "input_tokens": 200,
+        "output_tokens": 80,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 15,
+        "reasoning_tokens": 40,
+    }
+    assert report.model_usage == {
+        "claude-sonnet-4": {
+            "cost": 0.0789,
+            "inputTokens": 200,
+            "outputTokens": 80,
+            "provider": "anthropic",
+        }
+    }
+
+
+def test_claude_code_parse_usage_report_none_on_plain_text():
+    assert ClaudeCodeBuilder().parse_usage_report("plain output") is None
+
+
+def test_claude_code_parse_usage_report_none_on_non_dict_json():
+    assert ClaudeCodeBuilder().parse_usage_report("[1, 2, 3]") is None
+
+
+def test_claude_code_parse_usage_report_none_on_empty():
+    assert ClaudeCodeBuilder().parse_usage_report("") is None
+
+
+def test_claude_code_parse_usage_report_partial_fields():
+    report = ClaudeCodeBuilder().parse_usage_report('{"total_cost_usd": 0.42}')
+    assert report is not None
+    assert report.total_cost_usd == 0.42
+    assert report.usage is None
+    assert report.model_usage is None
+
+
+def test_claude_code_parse_usage_report_absent_cost_yields_none():
+    report = ClaudeCodeBuilder().parse_usage_report('{"usage": {"input_tokens": 1}}')
+    assert report is not None
+    assert report.total_cost_usd is None
+    assert report.usage == {"input_tokens": 1}
+
+
 # --- OpenCodeBuilder ---
 
 
@@ -193,7 +309,9 @@ def test_opencode_unsupported_strategy_raises(tmp_path):
 
 
 def test_opencode_model_override(tmp_path):
-    req = AgentRunRequest(engine="opencode", prompt="x", workspace=tmp_path, model="custom-model")
+    req = AgentRunRequest(
+        engine="opencode", prompt="x", workspace=tmp_path, model="custom-model"
+    )
     inv = OpenCodeBuilder().build_invocation(req, "env-key")
     assert inv.argv[2] == "custom-model"
 
@@ -261,7 +379,13 @@ def test_codex_env_key_strategy(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="fix the bug", workspace=tmp_path)
     inv = CodexBuilder().build_invocation(req, "env-key")
 
-    assert inv.argv == ("codex", "exec", "-c", "model_reasoning_effort=high", "fix the bug")
+    assert inv.argv == (
+        "codex",
+        "exec",
+        "-c",
+        "model_reasoning_effort=high",
+        "fix the bug",
+    )
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
     assert inv.files == ()
     assert inv.prompt_path is None
@@ -278,7 +402,9 @@ def test_codex_none_strategy_has_no_credentials(tmp_path):
 
 def test_codex_unsupported_strategy_raises(tmp_path):
     req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
-    with pytest.raises(ValueError, match="does not support credential_strategy='proxy'"):
+    with pytest.raises(
+        ValueError, match="does not support credential_strategy='proxy'"
+    ):
         CodexBuilder().build_invocation(req, "proxy")
 
 
@@ -290,16 +416,16 @@ def test_codex_model_override(tmp_path):
 
 
 def test_codex_prompt_is_last_argv_element(tmp_path):
-    req = AgentRunRequest(engine="codex", prompt="the actual prompt", workspace=tmp_path)
+    req = AgentRunRequest(
+        engine="codex", prompt="the actual prompt", workspace=tmp_path
+    )
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert inv.argv[-1] == "the actual prompt"
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
 def test_codex_emits_effort_flag(tmp_path, effort):
-    req = AgentRunRequest(
-        engine="codex", prompt="x", workspace=tmp_path, effort=effort
-    )
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path, effort=effort)
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert "-c" in inv.argv
     assert inv.argv[inv.argv.index("-c") + 1] == f"model_reasoning_effort={effort}"
@@ -379,7 +505,7 @@ def test_grok_supported_strategies():
 
 
 def test_grok_default_model():
-    assert GrokBuilder().default_model() == "grok-4.6"
+    assert GrokBuilder().default_model() == "grok-4.7"
 
 
 def test_grok_env_key_strategy(tmp_path):
@@ -394,7 +520,7 @@ def test_grok_env_key_strategy(tmp_path):
     assert inv.argv[inv.argv.index("--output-format") + 1] == "plain"
     assert "--always-approve" in inv.argv
     assert "-m" in inv.argv
-    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.7"
     assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
     assert inv.home_strategy == "hermetic"
     assert inv.prompt_path == expected_prompt_path
@@ -414,10 +540,12 @@ def test_grok_none_strategy_uses_real_home(tmp_path):
 
 
 def test_grok_model_override(tmp_path):
-    req = AgentRunRequest(engine="grok", prompt="x", workspace=tmp_path, model="grok-4.6")
+    req = AgentRunRequest(
+        engine="grok", prompt="x", workspace=tmp_path, model="grok-4.7"
+    )
     inv = GrokBuilder().build_invocation(req, "env-key")
     assert "-m" in inv.argv
-    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.6"
+    assert inv.argv[inv.argv.index("-m") + 1] == "grok-4.7"
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
@@ -479,3 +607,99 @@ def test_grok_parse_session_id_none_on_plain():
 
 def test_grok_parse_session_id_none_when_absent():
     assert GrokBuilder().parse_session_id('{"text": "ok"}') is None
+
+
+# --- GrokBuilder.parse_usage_report ---
+
+
+def _grok_usage_stdout() -> str:
+    return json.dumps(
+        {
+            "sessionId": "g-sess-1",
+            "total_cost_usd": 0.0123,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 10,
+                "cache_creation_input_tokens": 5,
+                "reasoning_tokens": 20,
+            },
+            "modelUsage": {
+                "grok-4.6": {
+                    "cost": 0.0123,
+                    "inputTokens": 100,
+                    "outputTokens": 50,
+                    "provider": "xai",
+                }
+            },
+        }
+    )
+
+
+def test_grok_parse_usage_report_extracts_fields():
+    report = GrokBuilder().parse_usage_report(_grok_usage_stdout())
+    assert isinstance(report, EngineUsageReport)
+    assert report.total_cost_usd == 0.0123
+    assert report.usage == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_input_tokens": 10,
+        "cache_creation_input_tokens": 5,
+        "reasoning_tokens": 20,
+    }
+    assert report.model_usage == {
+        "grok-4.6": {
+            "cost": 0.0123,
+            "inputTokens": 100,
+            "outputTokens": 50,
+            "provider": "xai",
+        }
+    }
+
+
+def test_grok_parse_usage_report_none_on_plain_text():
+    assert GrokBuilder().parse_usage_report("plain output") is None
+
+
+def test_grok_parse_usage_report_none_on_non_dict_json():
+    assert GrokBuilder().parse_usage_report("[1, 2, 3]") is None
+
+
+def test_grok_parse_usage_report_none_on_empty():
+    assert GrokBuilder().parse_usage_report("") is None
+
+
+def test_grok_parse_usage_report_partial_fields():
+    # Only total_cost_usd present: other fields stay None.
+    report = GrokBuilder().parse_usage_report('{"total_cost_usd": 0.42}')
+    assert report is not None
+    assert report.total_cost_usd == 0.42
+    assert report.usage is None
+    assert report.model_usage is None
+
+
+def test_grok_parse_usage_report_absent_cost_yields_none():
+    report = GrokBuilder().parse_usage_report('{"usage": {"input_tokens": 1}}')
+    assert report is not None
+    assert report.total_cost_usd is None
+    assert report.usage == {"input_tokens": 1}
+
+
+def test_grok_parse_usage_report_warns_on_all_fields_absent(caplog):
+    # A JSON dict with none of total_cost_usd/usage/modelUsage is exactly what
+    # a grok --output-format json schema mismatch would look like: the report
+    # still returns (all-None), but a warning surfaces the mismatch instead of
+    # failing silently.
+    with caplog.at_level("WARNING", logger="vera_engine.builders.base"):
+        report = GrokBuilder().parse_usage_report('{"unrelated": true}')
+    assert report is not None
+    assert report.total_cost_usd is None
+    assert report.usage is None
+    assert report.model_usage is None
+    assert any("grok" in record.getMessage() for record in caplog.records)
+
+
+def test_claude_code_parse_usage_report_no_warning_when_fields_present(caplog):
+    with caplog.at_level("WARNING", logger="vera_engine.builders.base"):
+        ClaudeCodeBuilder().parse_usage_report(_claude_usage_stdout())
+    assert caplog.records == []

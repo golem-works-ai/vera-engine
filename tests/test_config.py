@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vera_engine.config import EngineConfig, load_config, _parse_config
+from vera_engine.config import EngineConfig, _parse_config, load_config
 
 
 def test_default_config_without_toml(tmp_path, monkeypatch):
@@ -25,7 +25,8 @@ def test_unknown_provider_returns_one():
 
 def test_parse_config(tmp_path):
     cfg = tmp_path / ".vera-engine.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         input_weight = 0.95
 
         [providers.anthropic]
@@ -33,7 +34,8 @@ def test_parse_config(tmp_path):
 
         [providers.openrouter]
         cost_ratio = 1.01375
-    """))
+    """)
+    )
     config = _parse_config(cfg)
     assert config.cost_ratio("anthropic") == pytest.approx(0.2)
     assert config.cost_ratio("openrouter") == pytest.approx(1.01375)
@@ -43,10 +45,12 @@ def test_parse_config(tmp_path):
 
 def test_load_config_workspace_file(tmp_path):
     cfg = tmp_path / ".vera-engine.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         [providers.anthropic]
         cost_ratio = 0.5
-    """))
+    """)
+    )
     config = load_config(workspace=tmp_path)
     assert config.cost_ratio("anthropic") == pytest.approx(0.5)
     assert config.cost_ratio("openrouter") == pytest.approx(1.01375)
@@ -55,30 +59,36 @@ def test_load_config_workspace_file(tmp_path):
 
 def test_parse_config_rejects_negative_ratio(tmp_path):
     cfg = tmp_path / ".vera-engine.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         [providers.anthropic]
         cost_ratio = -1.0
-    """))
+    """)
+    )
     with pytest.raises(ValueError, match="positive number"):
         _parse_config(cfg)
 
 
 def test_parse_config_rejects_zero_ratio(tmp_path):
     cfg = tmp_path / ".vera-engine.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         [providers.openai]
         cost_ratio = 0
-    """))
+    """)
+    )
     with pytest.raises(ValueError, match="positive number"):
         _parse_config(cfg)
 
 
 def test_parse_config_rejects_string_ratio(tmp_path):
     cfg = tmp_path / ".vera-engine.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(
+        textwrap.dedent("""\
         [providers.openai]
         cost_ratio = "cheap"
-    """))
+    """)
+    )
     with pytest.raises(ValueError, match="positive number"):
         _parse_config(cfg)
 

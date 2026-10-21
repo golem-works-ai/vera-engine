@@ -30,9 +30,7 @@ class ResumeFailedError(RuntimeError):
     exit, it was killed.
     """
 
-    def __init__(
-        self, resume: str, returncode: int, engine: str, stderr: str
-    ) -> None:
+    def __init__(self, resume: str, returncode: int, engine: str, stderr: str) -> None:
         self.resume = resume
         self.returncode = returncode
         self.engine = engine
@@ -62,6 +60,7 @@ _REFERENCE_RE = re.compile(r"\$(?:\{(?P<braced>\w+)\}|(?P<bare>\w+))")
 
 def _expand_vars(text: str, env: dict[str, str]) -> str:
     """Expand $NAME and ${NAME} references. Fails fast on unresolved ones."""
+
     def _replace(match: re.Match[str]) -> str:
         name = match.group("braced") or match.group("bare")
         try:
@@ -71,6 +70,7 @@ def _expand_vars(text: str, env: dict[str, str]) -> str:
                 f"unresolved reference ${name} in materialized file "
                 f"(available: {sorted(env)})"
             ) from None
+
     return _REFERENCE_RE.sub(_replace, text)
 
 
@@ -167,6 +167,7 @@ def render_local(
                 capture_output=True,
                 text=True,
                 timeout=invocation.timeout_seconds,
+                check=False,
             )
             # Fail fast: a resume that exits non-zero almost certainly means
             # the session id is invalid or stale. Timeouts fall through to the
@@ -182,6 +183,11 @@ def render_local(
             session_id = (
                 builder.parse_session_id(result.stdout) if builder is not None else None
             )
+            usage_report = (
+                builder.parse_usage_report(result.stdout)
+                if builder is not None
+                else None
+            )
             return RunResult(
                 returncode=result.returncode,
                 stdout=result.stdout,
@@ -190,16 +196,33 @@ def render_local(
                 engine=invocation.engine,
                 argv=invocation.argv,
                 session_id=session_id,
+                usage_report=usage_report,
             )
         except subprocess.TimeoutExpired as exc:
+            timeout_stdout = (
+                exc.stdout or ""
+                if isinstance(exc.stdout, str)
+                else (exc.stdout or b"").decode("utf-8", errors="replace")
+            )
+            timeout_stderr = (
+                exc.stderr or ""
+                if isinstance(exc.stderr, str)
+                else (exc.stderr or b"").decode("utf-8", errors="replace")
+            )
+            usage_report = (
+                builder.parse_usage_report(timeout_stdout)
+                if builder is not None
+                else None
+            )
             return RunResult(
                 returncode=-1,
-                stdout=exc.stdout or "" if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", errors="replace"),
-                stderr=exc.stderr or "" if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", errors="replace"),
+                stdout=timeout_stdout,
+                stderr=timeout_stderr,
                 timed_out=True,
                 engine=invocation.engine,
                 argv=invocation.argv,
                 session_id=None,
+                usage_report=usage_report,
             )
         finally:
             _cleanup_files(cleanup_paths)
