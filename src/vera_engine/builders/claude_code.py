@@ -69,7 +69,7 @@ class ClaudeCodeBuilder(EngineBuilder):
             env["ANTHROPIC_BASE_URL"] = SecretRef("ANTHROPIC_BASE_URL")
         # "none" strategy: no credentials injected, uses local OAuth session.
 
-        env["CLAUDE_CODE_EFFORT_LEVEL"] = _EFFORT_MAP[request.effort]
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = _EFFORT_MAP[request.effort or "high"]
 
         for k, v in request.extra_env.items():
             if k not in env:

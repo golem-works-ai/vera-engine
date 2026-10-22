@@ -33,6 +33,8 @@ class OpenCodeBuilder(EngineBuilder):
         if model:
             argv.extend(["-m", model])
         argv.append("run")
+        if request.effort is not None:
+            argv.extend(["--variant", request.effort])
         if request.resume:
             argv.extend(["--session", request.resume])
         if request.structured_output:

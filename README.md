@@ -34,6 +34,11 @@ request = AgentRunRequest(
 result = build_and_run(request, credentials={"ANTHROPIC_API_KEY": "..."})
 ```
 
+Auto-selection uses the selected model's qualified `effort` when set. An explicit
+`--effort` (or `AgentRunRequest(effort=...)`) overrides it. Omitted effort is
+represented by `None`; rows with no qualified effort retain engine defaults
+(high for Claude Code, Codex, and Grok; provider default for OpenCode).
+
 ### Session resume
 
 Pass `--resume <id>` (or `AgentRunRequest(resume=...)`) to continue an existing

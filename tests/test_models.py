@@ -96,3 +96,39 @@ def test_catalog_has_gpt6_codex_and_openrouter_rows():
     assert by_id["openrouter/openai/gpt-6-luna"].engine == "opencode"
     assert "gpt-5.6-sol" not in by_id
     assert "gpt-5.6-terra" in by_id
+
+
+def test_clay_catalog_exact_qualified_rows(monkeypatch):
+    monkeypatch.setattr("vera_engine.pricing.openrouter_model_costs", lambda _: None)
+    rows = {s.model_id: s for s in get_catalog() if s.tier == Tier.clay}
+    assert {model: spec.effort for model, spec in rows.items()} == {
+        "claude-haiku-5-5": None,
+        "gpt-6-luna": None,
+        "openrouter/openai/gpt-6-luna": None,
+        "openrouter/xiaomi/mimo-v2.6-flash": "low",
+        "openrouter/z-ai/glm-5.3-flash": "low",
+        "openrouter/qwen/qwen3.8-27b": "low",
+    }
+    for model, prices in {
+        "openrouter/xiaomi/mimo-v2.6-flash": (0.14, 0.28),
+        "openrouter/z-ai/glm-5.3-flash": (0.036, 0.90),
+        "openrouter/qwen/qwen3.8-27b": (0.04, 2.30),
+    }.items():
+        spec = rows[model]
+        assert (spec.engine, spec.provider) == ("opencode", "openrouter")
+        assert (spec.input_cost, spec.output_cost) == prices
+
+
+@pytest.mark.parametrize("effort", [None, "low", "medium", "high"])
+def test_model_spec_effort(effort):
+    spec = ModelSpec("test", "codex", "openai", 1.0, 2.0, Tier.clay, effort=effort)
+    assert spec.effort == effort
+
+
+def test_model_def_and_spec_reject_invalid_effort():
+    from vera_engine.models import _ModelDef
+
+    with pytest.raises(ValueError, match="effort must be one of"):
+        ModelSpec("test", "codex", "openai", 1.0, 2.0, Tier.clay, effort="extreme")
+    with pytest.raises(ValueError, match="effort must be one of"):
+        _ModelDef("test", "codex", "openai", "", 1.0, 2.0, Tier.clay, effort="extreme")

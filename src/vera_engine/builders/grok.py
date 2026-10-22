@@ -55,7 +55,7 @@ class GrokBuilder(EngineBuilder):
         if model:
             argv.extend(["-m", model])
 
-        argv.extend(["--reasoning-effort", request.effort])
+        argv.extend(["--reasoning-effort", request.effort or "high"])
 
         if request.resume:
             argv.extend(["--resume", request.resume])
