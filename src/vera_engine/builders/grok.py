@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder, parse_usage_report_json
+from vera_engine.builders.base import (
+    EngineBuilder,
+    parse_usage_report_json,
+    per_run_filename,
+)
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
-DEFAULT_PROMPT_FILENAME = ".vera-engine-grok-prompt.md"
+PROMPT_FILENAME_PREFIX = ".vera-engine-grok-prompt"
 
 
 class GrokBuilder(EngineBuilder):
@@ -29,12 +33,13 @@ class GrokBuilder(EngineBuilder):
     ) -> EngineInvocation:
         self.validate_strategy(strategy)
 
+        prompt_filename = per_run_filename(PROMPT_FILENAME_PREFIX, ".md")
         prompt_file = MaterializedFile(
-            relative_path=DEFAULT_PROMPT_FILENAME,
+            relative_path=prompt_filename,
             content=request.prompt,
             cleanup=True,
         )
-        prompt_path = request.workspace / DEFAULT_PROMPT_FILENAME
+        prompt_path = request.workspace / prompt_filename
 
         output_format = "json" if request.structured_output else "plain"
         argv: list[str] = [
