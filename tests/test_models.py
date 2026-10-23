@@ -94,5 +94,16 @@ def test_catalog_has_gpt6_codex_and_openrouter_rows():
     assert by_id["gpt-6-astra"].tier == Tier.iron
     assert by_id["openrouter/openai/gpt-6.1-sol"].engine == "opencode"
     assert by_id["openrouter/openai/gpt-6-luna"].engine == "opencode"
-    assert "gpt-5.6-sol" not in by_id
+    assert by_id["gpt-5.6-sol"].tier == Tier.bronze
+    assert "gpt-5.5" not in by_id
+    assert by_id["openrouter/openai/gpt-5.5"].tier == Tier.stone
     assert "gpt-5.6-terra" in by_id
+
+
+def test_catalog_tiers_from_2026_10_22_plan_benchmark():
+    by_id = {s.model_id: s for s in get_catalog()}
+    assert by_id["claude-opus-5-5"].tier == Tier.iron
+    assert by_id["openrouter/anthropic/claude-opus-5.5"].tier == Tier.iron
+    assert by_id["claude-sonnet-5-5"].tier == Tier.bronze
+    assert by_id["claude-opus-4-8"].tier == Tier.bronze
+    assert by_id["openrouter/z-ai/glm-5.1"].tier == Tier.clay
