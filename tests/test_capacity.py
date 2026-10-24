@@ -46,8 +46,8 @@ class _FakeResponse:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        return self._body if amt is None else self._body[:amt]
 
     def __enter__(self) -> "_FakeResponse":
         return self
@@ -749,6 +749,24 @@ def test_subscription_probe_logs_raw_body_on_unexpected_status(caplog):
     assert any(
         "internal server error" in record.getMessage() for record in caplog.records
     )
+
+
+def test_subscription_probe_logs_raw_body_on_429_non_available(caplog):
+    """A 429 whose headers resolve to a non-available verdict (e.g. a
+    blocked window) must still surface the raw body -- otherwise it's the
+    same silent dead end this PR fixes for 401/403 and unexpected statuses."""
+    headers = _unified_headers(status_5h="blocked")
+    with (
+        patch("vera_engine.capacity._anthropic_oauth_token", return_value="tok"),
+        patch(
+            "vera_engine.capacity._post_anthropic_messages",
+            return_value=(429, headers, b'{"error": {"message": "rate limited"}}'),
+        ),
+        caplog.at_level("WARNING", logger="vera_engine.capacity"),
+    ):
+        cap = _check_claude_code_subscription()
+    assert cap.available is False
+    assert any("rate limited" in record.getMessage() for record in caplog.records)
 
 
 def test_subscription_probe_no_warning_on_success(caplog):
