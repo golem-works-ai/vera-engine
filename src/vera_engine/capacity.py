@@ -292,7 +292,10 @@ def _parse_anthropic_rate_headers(
     parts = [
         f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
     ]
-    status_ok = (not chosen.status) or chosen.status in _ALLOWED_UNIFIED_STATUSES
+    status_ok = all(
+        (not reading.status) or reading.status in _ALLOWED_UNIFIED_STATUSES
+        for reading in readings
+    )
     return ProviderCapacity(
         "anthropic",
         available=chosen.remaining_pct > 2 and status_ok,

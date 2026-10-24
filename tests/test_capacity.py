@@ -126,6 +126,13 @@ def test_parse_anthropic_headers_uses_healthier_window_even_if_other_is_exhauste
     assert cap.window_name == "week"
 
 
+def test_parse_anthropic_headers_blocked_window_is_unavailable_even_if_not_chosen():
+    headers = _unified_headers(util_5h="0.99", status_5h="blocked", util_7d="0.05")
+    cap = _parse_anthropic_rate_headers(headers, now=_NOW)
+    assert cap.window_name == "week"
+    assert cap.available is False
+
+
 def test_parse_anthropic_headers_nearly_exhausted():
     headers = _unified_headers(util_5h="0.99", util_7d="0.99")
     cap = _parse_anthropic_rate_headers(headers, now=_NOW)
