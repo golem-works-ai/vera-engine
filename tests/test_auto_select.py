@@ -348,14 +348,16 @@ def test_explicit_provider_ratio_overrides_oauth_subscription_default():
     assert selection_cost_ratio(spec, config, capacities) == pytest.approx(0.25)
 
 
-def test_tier_iron_selects_fable():
+def test_tier_iron_selects_opus_55():
+    # Opus 5.5 tied Fable 5 on the 2026-10-22 plan benchmark at a third of the
+    # price, so it is the cheapest iron qualifier.
     config = EngineConfig(
         provider_ratios={"anthropic": 1.0, "openrouter": 1.0, "openai": 1.0}
     )
     with patch("vera_engine.auto_select.check_all", return_value=_all_healthy()):
         sel = select_model(config, tier=Tier.iron)
     assert sel.model.tier >= Tier.iron
-    assert "fable" in sel.model.model_id
+    assert sel.model.model_id == "claude-opus-5-5"
 
 
 def test_tier_none_includes_all():

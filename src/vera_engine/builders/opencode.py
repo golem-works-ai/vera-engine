@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from vera_engine.builders.base import EngineBuilder
+from vera_engine.builders.base import EngineBuilder, per_run_filename
 from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
 from vera_engine.request import AgentRunRequest
@@ -47,16 +47,18 @@ class OpenCodeBuilder(EngineBuilder):
         files: list[MaterializedFile] = []
         if strategy == "proxy":
             config = {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
+            config_filename = per_run_filename(".vera-engine-opencode-config", ".json")
             # Stored body holds $ANTHROPIC_BASE_URL; default is False so literal $ in prompts stay intact.
             files.append(
                 MaterializedFile(
-                    relative_path="opencode.json",
+                    relative_path=config_filename,
                     content=json.dumps(config, indent=2),
                     expand_references=True,
                     cleanup=True,
                 )
             )
             env["ANTHROPIC_BASE_URL"] = SecretRef("ANTHROPIC_BASE_URL")
+            env["OPENCODE_CONFIG"] = str(request.workspace / config_filename)
 
         for k, v in request.extra_env.items():
             if k not in env:

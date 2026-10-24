@@ -98,6 +98,35 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         10.0,
         Tier.stone,
     ),
+    # Tiers below come from the 2026-10-22 plan-review benchmark (vera
+    # docs/presentations/onboarding-users, slide 8). Opus 5.5 ties Fable 5.
+    _ModelDef(
+        "claude-opus-5-5",
+        "claude-code",
+        "anthropic",
+        "anthropic/claude-opus-5.5",
+        4.0,
+        20.0,
+        Tier.iron,
+    ),
+    _ModelDef(
+        "claude-sonnet-5-5",
+        "claude-code",
+        "anthropic",
+        "anthropic/claude-sonnet-5.5",
+        2.0,
+        10.0,
+        Tier.bronze,
+    ),
+    _ModelDef(
+        "claude-opus-4-8",
+        "claude-code",
+        "anthropic",
+        "anthropic/claude-opus-4.8",
+        5.0,
+        25.0,
+        Tier.bronze,
+    ),
     # 4.6 models use ~30% fewer tokens per task. Costs are token-adjusted
     # (actual $/MTok * 0.7) to reflect per-task savings. No live pricing
     # override — the adjustment is the point.
@@ -118,12 +147,16 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     ),
     # OpenAI via codex
     # Prices from openrouter.ai/api/v1/models on 2026-10-11. The codex CLI on a
-    # ChatGPT account accepts gpt-6-sol/luna/astra, not gpt-6.1-*.
+    # ChatGPT account accepts gpt-6-sol/luna/astra and gpt-5.6-sol (probed
+    # 2026-10-22), not gpt-6.1-* or gpt-5.5.
     _ModelDef(
         "gpt-6-astra", "codex", "openai", "openai/gpt-6-astra", 10.0, 50.0, Tier.iron
     ),
     _ModelDef(
         "gpt-6-sol", "codex", "openai", "openai/gpt-6-sol", 2.0, 10.0, Tier.bronze
+    ),
+    _ModelDef(
+        "gpt-5.6-sol", "codex", "openai", "openai/gpt-5.6-sol", 4.0, 20.0, Tier.bronze
     ),
     _ModelDef(
         "gpt-5.6-terra", "codex", "openai", "openai/gpt-5.6-terra", 1.0, 6.0, Tier.stone
@@ -158,6 +191,33 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         2.0,
         10.0,
         Tier.stone,
+    ),
+    _ModelDef(
+        "openrouter/anthropic/claude-opus-5.5",
+        "opencode",
+        "openrouter",
+        "anthropic/claude-opus-5.5",
+        4.0,
+        20.0,
+        Tier.iron,
+    ),
+    _ModelDef(
+        "openrouter/anthropic/claude-sonnet-5.5",
+        "opencode",
+        "openrouter",
+        "anthropic/claude-sonnet-5.5",
+        2.0,
+        10.0,
+        Tier.bronze,
+    ),
+    _ModelDef(
+        "openrouter/anthropic/claude-opus-4.8",
+        "opencode",
+        "openrouter",
+        "anthropic/claude-opus-4.8",
+        5.0,
+        25.0,
+        Tier.bronze,
     ),
     _ModelDef(
         "openrouter/anthropic/claude-opus-4.6",
@@ -222,6 +282,16 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         10.0,
         Tier.bronze,
     ),
+    # Codex rejects gpt-5.5 on a ChatGPT account, so it lives here only.
+    _ModelDef(
+        "openrouter/openai/gpt-5.5",
+        "opencode",
+        "openrouter",
+        "openai/gpt-5.5",
+        5.0,
+        30.0,
+        Tier.stone,
+    ),
     _ModelDef(
         "openrouter/openai/gpt-5.6-terra",
         "opencode",
@@ -280,6 +350,15 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         0.04,
         4.8,
         Tier.stone,
+    ),
+    _ModelDef(
+        "openrouter/z-ai/glm-5.1",
+        "opencode",
+        "openrouter",
+        "z-ai/glm-5.1",
+        1.4,
+        4.4,
+        Tier.clay,
     ),
 )
 
