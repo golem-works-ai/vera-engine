@@ -1,14 +1,19 @@
 """Tests for provider capacity checks."""
 
+import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.message import Message
+from io import BytesIO
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pytest
 
 from vera_engine.capacity import (
     ProviderCapacity,
+    _ANTHROPIC_MESSAGES_URL,
+    _HAIKU_PROBE_MODEL,
     _check_grok_usage,
     _parse_anthropic_rate_headers,
     _parse_codex_status,
@@ -21,84 +26,262 @@ from vera_engine.capacity import (
     check_xai,
 )
 
-
-def _make_headers(
-    session_util: float = 0.04,
-    week_util: float = 0.09,
-    session_reset_epoch: int = 1723475400,
-    week_reset_epoch: int = 1723899600,
-    session_status: str = "allowed",
-    week_status: str = "allowed",
-) -> Message:
-    """Build an email.message.Message mimicking Anthropic rate-limit headers."""
-    msg = Message()
-    msg["anthropic-ratelimit-unified-5h-utilization"] = str(session_util)
-    msg["anthropic-ratelimit-unified-5h-reset"] = str(session_reset_epoch)
-    msg["anthropic-ratelimit-unified-5h-status"] = session_status
-    msg["anthropic-ratelimit-unified-7d-utilization"] = str(week_util)
-    msg["anthropic-ratelimit-unified-7d-reset"] = str(week_reset_epoch)
-    msg["anthropic-ratelimit-unified-7d-status"] = week_status
-    return msg
+_NOW = datetime(2026, 9, 1, 20, 45, tzinfo=UTC)
+# 5h window 50% elapsed: 2.5h remaining. 7d window 50% elapsed: 3.5d remaining.
+_RESET_5H = int((_NOW + timedelta(hours=2.5)).timestamp())
+_RESET_7D = int((_NOW + timedelta(days=3.5)).timestamp())
+# 5h window 20% elapsed: 4h remaining.
+_RESET_5H_EARLY = int((_NOW + timedelta(hours=4)).timestamp())
 
 
-def test_parse_rate_headers_picks_most_constrained_window():
-    """The probe must report the week window when week is more used than session."""
-    headers = _make_headers(session_util=0.04, week_util=0.09)
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
+class _FakeResponse:
+    def __init__(self, headers: dict[str, str], status: int = 200, body: bytes = b"{}"):
+        self.headers = headers
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _unified_headers(
+    *,
+    util_5h: str = "0.07",
+    util_7d: str = "0.02",
+    status_5h: str = "allowed",
+    status_7d: str = "allowed",
+    reset_5h: int = _RESET_5H,
+    reset_7d: int = _RESET_7D,
+) -> dict[str, str]:
+    return {
+        "anthropic-ratelimit-unified-5h-utilization": util_5h,
+        "anthropic-ratelimit-unified-5h-reset": str(reset_5h),
+        "anthropic-ratelimit-unified-5h-status": status_5h,
+        "anthropic-ratelimit-unified-7d-utilization": util_7d,
+        "anthropic-ratelimit-unified-7d-reset": str(reset_7d),
+        "anthropic-ratelimit-unified-7d-status": status_7d,
+    }
+
+
+def test_usage_pressure_is_remaining_over_elapsed_window():
+    cap = ProviderCapacity(
+        "xai",
+        available=True,
+        remaining_pct=47.0,
+        token_used_pct=53.0,
+        window_used_pct=40.0,
+        window_name="week",
+    )
+    assert cap.usage_pressure == pytest.approx(0.47 / (0.40 * 0.9 + 0.05))
+
+
+def test_usage_pressure_falls_back_to_token_used_when_remaining_absent():
+    cap = ProviderCapacity(
+        "anthropic",
+        available=True,
+        token_used_pct=45.0,
+        window_used_pct=30.0,
+    )
+    assert cap.usage_pressure == pytest.approx(0.55 / (0.30 * 0.9 + 0.05))
+
+
+def test_parse_anthropic_headers_picks_week_when_its_pressure_is_larger():
+    cap = _parse_anthropic_rate_headers(_unified_headers(), now=_NOW)
     assert cap.available is True
-    assert cap.token_used_pct == pytest.approx(9.0)
-    assert cap.remaining_pct == pytest.approx(91.0)
-    assert cap.window_name == "week"
     assert cap.auth_method == "oauth"
+    assert cap.remaining_pct == pytest.approx(98.0)
+    assert cap.token_used_pct == pytest.approx(2.0)
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(50.0, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.98 / (0.50 * 0.9 + 0.05), abs=0.01)
+    assert "session 93%" in cap.detail
+    assert "week 98%" in cap.detail
 
 
-def test_parse_rate_headers_picks_session_when_more_constrained():
-    """When session usage exceeds week, the probe picks session."""
-    headers = _make_headers(session_util=0.50, week_util=0.09)
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
-    assert cap.token_used_pct == pytest.approx(50.0)
-    assert cap.remaining_pct == pytest.approx(50.0)
+def test_parse_anthropic_headers_picks_session_when_its_pressure_is_larger():
+    headers = _unified_headers(
+        util_5h="0.10",
+        util_7d="0.50",
+        reset_5h=_RESET_5H_EARLY,
+    )
+    cap = _parse_anthropic_rate_headers(headers, now=_NOW)
+    assert cap.remaining_pct == pytest.approx(90.0)
+    assert cap.token_used_pct == pytest.approx(10.0)
     assert cap.window_name == "session"
+    assert cap.window_used_pct == pytest.approx(20.0, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.90 / (0.20 * 0.9 + 0.05), abs=0.01)
 
 
-def test_parse_rate_headers_detail_shows_both_windows():
-    headers = _make_headers(session_util=0.04, week_util=0.09)
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
-    assert "session 96%" in cap.detail
-    assert "week 91%" in cap.detail
+def test_parse_anthropic_headers_uses_healthier_window_even_if_other_is_exhausted():
+    headers = _unified_headers(util_5h="0.99", util_7d="0.10")
+    cap = _parse_anthropic_rate_headers(headers, now=_NOW)
+    assert cap.available is True
+    assert cap.remaining_pct == pytest.approx(90.0)
+    assert cap.window_name == "week"
 
 
-def test_parse_rate_headers_nearly_exhausted():
-    headers = _make_headers(session_util=0.98, week_util=0.99)
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
+def test_parse_anthropic_headers_blocked_window_is_unavailable_even_if_not_chosen():
+    headers = _unified_headers(util_5h="0.99", status_5h="blocked", util_7d="0.05")
+    cap = _parse_anthropic_rate_headers(headers, now=_NOW)
+    assert cap.window_name == "week"
+    assert cap.available is False
+
+
+def test_parse_anthropic_headers_nearly_exhausted():
+    headers = _unified_headers(util_5h="0.99", util_7d="0.99")
+    cap = _parse_anthropic_rate_headers(headers, now=_NOW)
     assert cap.available is False
     assert cap.remaining_pct == pytest.approx(1.0)
 
 
-def test_parse_rate_headers_no_headers():
-    msg = Message()
-    cap = _parse_anthropic_rate_headers(msg)
+def test_parse_anthropic_headers_missing_windows_is_usage_unknown():
+    cap = _parse_anthropic_rate_headers({}, now=_NOW)
     assert cap.available is True
+    assert cap.remaining_pct is None
+    assert cap.auth_method == "oauth"
     assert "usage unknown" in cap.detail
 
 
-def test_parse_rate_headers_warning_status():
-    headers = _make_headers(
-        session_util=0.04, week_util=0.85, week_status="allowed_warning"
-    )
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
+def _patch_probe(headers: dict[str, str] | None = None, *, error: BaseException | None = None):
+    def fake_urlopen(req: object, timeout: object = None) -> _FakeResponse:
+        if error is not None:
+            raise error
+        return _FakeResponse(headers or _unified_headers())
+
+    return patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen)
+
+
+def test_check_anthropic_prefers_subscription_when_key_also_set():
+    env = {
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        with _patch_probe():
+            cap = check_anthropic()
     assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert cap.remaining_pct == pytest.approx(98.0)
 
 
-def test_parse_rate_headers_blocked_status():
-    headers = _make_headers(session_util=0.04, week_util=0.85, week_status="blocked")
-    now = datetime(2026, 8, 16, 6, 0, tzinfo=UTC)
-    cap = _parse_anthropic_rate_headers(headers, now=now)
+def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
+    env = {
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        with _patch_probe(_unified_headers(util_5h="0.99", util_7d="0.99")):
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+    assert "API key" in cap.detail
+
+
+def test_check_anthropic_falls_through_to_api_key_when_oauth_token_missing():
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True):
+        with patch(
+            "vera_engine.capacity._CLAUDE_CREDENTIALS_PATH"
+        ) as creds_path:
+            creds_path.read_text.side_effect = FileNotFoundError
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+    assert "API key" in cap.detail
+
+
+def test_check_anthropic_posts_haiku_to_api_anthropic_with_oauth_token():
+    captured: list[tuple[object, object]] = []
+
+    def fake_urlopen(req: object, timeout: object = None) -> _FakeResponse:
+        captured.append((req, timeout))
+        return _FakeResponse(_unified_headers())
+
+    env = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "  sk-ant-oat01-test  ",
+        "ANTHROPIC_API_KEY": "sk-ant-api-should-not-be-used",
+        "ANTHROPIC_AUTH_TOKEN": "auth-should-not-be-used",
+        "ANTHROPIC_BASE_URL": "https://proxy.example.invalid",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "oauth"
+    req, _timeout = captured[0]
+    assert req.full_url == _ANTHROPIC_MESSAGES_URL
+    assert "proxy.example.invalid" not in req.full_url
+    assert req.get_header("Authorization") == "Bearer sk-ant-oat01-test"
+    body = json.loads(req.data.decode())
+    assert body["model"] == _HAIKU_PROBE_MODEL
+    assert body["max_tokens"] == 1
+
+
+def test_check_anthropic_reads_credentials_file_when_env_token_absent(tmp_path):
+    creds = tmp_path / ".credentials.json"
+    creds.write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "sk-ant-oat01-file\n"}}),
+        encoding="utf-8",
+    )
+    captured: list[object] = []
+
+    def fake_urlopen(req: object, timeout: object = None) -> _FakeResponse:
+        captured.append(req)
+        return _FakeResponse(_unified_headers())
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("vera_engine.capacity._CLAUDE_CREDENTIALS_PATH", creds):
+            with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+                cap = check_anthropic()
+    assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert captured[0].get_header("Authorization") == "Bearer sk-ant-oat01-file"
+
+
+def test_check_anthropic_401_is_not_on_subscription():
+    error = HTTPError(
+        _ANTHROPIC_MESSAGES_URL,
+        401,
+        "Unauthorized",
+        Message(),
+        BytesIO(b""),
+    )
+    with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-bad"}, clear=True):
+        with _patch_probe(error=error):
+            cap = check_anthropic()
+    assert cap.available is False
+    assert "not on subscription" in cap.detail
+
+
+def test_check_anthropic_429_still_parses_rate_headers():
+    hdrs = Message()
+    for key, value in _unified_headers().items():
+        hdrs[key] = value
+    error = HTTPError(
+        _ANTHROPIC_MESSAGES_URL,
+        429,
+        "Too Many Requests",
+        hdrs,
+        BytesIO(b""),
+    )
+    with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}, clear=True):
+        with _patch_probe(error=error):
+            cap = check_anthropic()
+    assert cap.available is True
+    assert cap.remaining_pct == pytest.approx(98.0)
+    assert cap.auth_method == "oauth"
+
+
+def test_check_anthropic_no_token_no_key(tmp_path):
+    missing = tmp_path / "missing.json"
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("vera_engine.capacity._CLAUDE_CREDENTIALS_PATH", missing):
+            cap = check_anthropic()
     assert cap.available is False
 
 
@@ -233,68 +416,6 @@ def test_check_openai_without_key_codex_unavailable():
     ):
         cap = check_openai()
     assert cap.available is False
-
-
-def test_check_anthropic_prefers_subscription_when_key_also_set():
-    sub = ProviderCapacity(
-        "anthropic",
-        available=True,
-        remaining_pct=91.0,
-        detail="session 96%, week 91% remaining",
-        auth_method="oauth",
-    )
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
-        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
-    ):
-        cap = check_anthropic()
-    assert cap.available is True
-    assert cap.auth_method == "oauth"
-    assert cap.remaining_pct == 91.0
-
-
-def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
-    sub = ProviderCapacity(
-        "anthropic",
-        available=False,
-        remaining_pct=1.0,
-        detail="session 2%, week 1% remaining",
-        auth_method="oauth",
-    )
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
-        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
-    ):
-        cap = check_anthropic()
-    assert cap.available is True
-    assert cap.auth_method == "api-key"
-    assert "API key" in cap.detail
-
-
-def test_check_anthropic_falls_through_to_api_key_when_probe_fails():
-    sub = ProviderCapacity(
-        "anthropic",
-        available=False,
-        detail="not on subscription",
-    )
-    with (
-        patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True),
-        patch("vera_engine.capacity._check_claude_code_subscription", return_value=sub),
-    ):
-        cap = check_anthropic()
-    assert cap.available is True
-    assert cap.auth_method == "api-key"
-    assert "API key" in cap.detail
-
-
-def test_check_anthropic_no_token_no_key():
-    with (
-        patch.dict(os.environ, {}, clear=True),
-        patch("vera_engine.capacity._anthropic_oauth_token", return_value=None),
-    ):
-        cap = check_anthropic()
-    assert cap.available is False
-    assert "not on subscription" in cap.detail
 
 
 GROK_MODELS_LOGGED_IN = """\

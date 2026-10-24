@@ -139,6 +139,8 @@ def _usage_pressure(remaining_pct: float, window_used_pct: float) -> float:
 
 
 def _anthropic_oauth_token() -> str | None:
+    # API keys do not return unified 5h/7d headers. The pool selector ranks
+    # CLAUDE_CODE_OAUTH_TOKEN, so that env var is the credential, not a shadow.
     env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     if env:
         return env
@@ -249,7 +251,7 @@ class _UnifiedWindow:
 def _parse_anthropic_rate_headers(
     headers: object, *, now: datetime | None = None
 ) -> ProviderCapacity:
-    """Pick the most constrained 5h/7d window (lowest pressure)."""
+    """Pick the 5h/7d window with larger remaining/time pressure."""
     mapped = _header_map(headers)
     current_time = now or datetime.now(UTC)
     readings: list[_UnifiedWindow] = []
@@ -286,11 +288,14 @@ def _parse_anthropic_rate_headers(
             auth_method="oauth",
         )
 
-    chosen = min(readings, key=lambda reading: reading.pressure)
+    chosen = max(readings, key=lambda reading: reading.pressure)
     parts = [
         f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
     ]
-    status_ok = (not chosen.status) or chosen.status in _ALLOWED_UNIFIED_STATUSES
+    status_ok = all(
+        (not reading.status) or reading.status in _ALLOWED_UNIFIED_STATUSES
+        for reading in readings
+    )
     return ProviderCapacity(
         "anthropic",
         available=chosen.remaining_pct > 2 and status_ok,
