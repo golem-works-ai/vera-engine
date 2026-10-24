@@ -85,6 +85,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Request structured JSON output so a session id can be captured",
     )
+    run_parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Let the agent edit files and run commands without approval prompts",
+    )
 
     # "list" subcommand
     sub.add_parser("list", help="List available engines")
@@ -277,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         tier=tier,
         resume=args.resume,
         structured_output=args.structured_output,
+        write_access=args.write,
     )
 
     builder = get_builder(request.engine)

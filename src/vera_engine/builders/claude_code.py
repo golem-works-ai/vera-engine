@@ -60,6 +60,9 @@ class ClaudeCodeBuilder(EngineBuilder):
         if request.resume:
             argv.extend(["--resume", request.resume])
 
+        if request.write_access:
+            argv.extend(["--permission-mode", "bypassPermissions"])
+
         env: dict[str, str | SecretRef] = {}
 
         if strategy == "env-key":

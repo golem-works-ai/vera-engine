@@ -32,6 +32,9 @@ class AgentRunRequest:
     pins: frozenset[str] | None = None
     resume: str | None = None
     structured_output: bool = False
+    # Headless CLIs default to read-only (codex) or deny edits (claude -p), so
+    # an implementation run must ask for writes explicitly.
+    write_access: bool = False
 
     def __post_init__(self) -> None:
         if self.engine is not None and self.engine == "":

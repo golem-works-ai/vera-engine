@@ -37,6 +37,8 @@ class OpenCodeBuilder(EngineBuilder):
             argv.extend(["--session", request.resume])
         if request.structured_output:
             argv.extend(["--format", "json"])
+        if request.write_access:
+            argv.append("--auto")
         argv.append(request.prompt)
 
         env: dict[str, str | SecretRef] = {}
