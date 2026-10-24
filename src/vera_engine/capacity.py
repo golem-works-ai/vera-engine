@@ -168,7 +168,10 @@ def _urlopen(req: urllib.request.Request, timeout: float) -> object:
     return opener.open(req, timeout=timeout)
 
 
-def _post_anthropic_messages(token: str) -> tuple[int, object]:
+_RAW_BODY_LOG_BYTES = 2000
+
+
+def _post_anthropic_messages(token: str) -> tuple[int, object, bytes]:
     body = json.dumps(
         {
             "model": _HAIKU_PROBE_MODEL,
@@ -187,11 +190,30 @@ def _post_anthropic_messages(token: str) -> tuple[int, object]:
             "User-Agent": "vera-engine",
         },
     )
+    # Capped at the same size _log_raw_probe_failure truncates to -- the body
+    # is only ever used for that log line, so there's no reason to pull more
+    # of it into memory on every probe call, success included.
     try:
         with _urlopen(req, timeout=_ANTHROPIC_PROBE_TIMEOUT_SECONDS) as resp:
-            return int(resp.status), resp.headers
+            return int(resp.status), resp.headers, resp.read(_RAW_BODY_LOG_BYTES)
     except urllib.error.HTTPError as exc:
-        return int(exc.code), exc.headers
+        return int(exc.code), exc.headers, exc.read(_RAW_BODY_LOG_BYTES)
+
+
+def _log_raw_probe_failure(reason: str, status: int, body: bytes) -> None:
+    """Log the truncated response body so a non-available verdict isn't a mystery.
+
+    A 401/403 from a broken or revoked credential looks identical to a
+    genuine "no subscription" response in ``detail`` alone. Logging the raw
+    body here keeps that distinction visible without changing caller-facing
+    behavior.
+    """
+    logger.warning(
+        "anthropic usage probe non-available (%s): status=%d body=%r",
+        reason,
+        status,
+        body[:_RAW_BODY_LOG_BYTES],
+    )
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
@@ -202,7 +224,7 @@ def _check_claude_code_subscription() -> ProviderCapacity:
             "anthropic", available=False, detail="not on subscription"
         )
     try:
-        status, headers = _post_anthropic_messages(token)
+        status, headers, body = _post_anthropic_messages(token)
     except TimeoutError:
         return ProviderCapacity(
             "anthropic", available=False, detail="anthropic usage check timed out"
@@ -213,16 +235,20 @@ def _check_claude_code_subscription() -> ProviderCapacity:
             "anthropic", available=False, detail=f"check failed: {exc}"
         )
     if status in (401, 403):
+        _log_raw_probe_failure("unauthorized", status, body)
         return ProviderCapacity(
             "anthropic", available=False, detail="not on subscription"
         )
     if status not in (200, 429):
+        _log_raw_probe_failure("unexpected status", status, body)
         return ProviderCapacity(
             "anthropic",
             available=False,
             detail=f"anthropic usage check HTTP {status}",
         )
     cap = _parse_anthropic_rate_headers(headers)
+    if not cap.available:
+        _log_raw_probe_failure("non-available verdict", status, body)
     logger.info(
         "anthropic header probe HTTP %s remaining_pct=%s window=%s",
         status,
