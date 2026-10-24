@@ -121,6 +121,45 @@ def test_parser_run_structured_output_defaults_false():
     assert args.structured_output is False
 
 
+def test_parser_run_write_defaults_false():
+    args = _build_parser().parse_args(["run", "--engine", "codex", "--prompt", "hi"])
+    assert args.write is False
+
+
+def test_main_write_flag_grants_codex_full_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
+    captured = {}
+
+    def fake_render_local(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        return RunResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
+        )
+
+    with patch("vera_engine.cli.render_local", fake_render_local):
+        rc = main(
+            [
+                "run",
+                "--engine",
+                "codex",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--write",
+            ]
+        )
+
+    assert rc == 0
+    argv = captured["invocation"].argv
+    assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
+
+
 # --- _collect_credentials ---
 
 

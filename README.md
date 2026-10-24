@@ -34,6 +34,19 @@ request = AgentRunRequest(
 result = build_and_run(request, credentials={"ANTHROPIC_API_KEY": "..."})
 ```
 
+### Write access
+
+Headless runs start read-only. Pass `--write` (or `AgentRunRequest(write_access=True)`) when the agent must edit files or commit.
+
+| Engine | Flag added |
+|---|---|
+| codex | `--sandbox danger-full-access` |
+| claude-code | `--permission-mode bypassPermissions` |
+| opencode | `--auto` |
+| grok | none, since it always passes `--always-approve` |
+
+Codex gets full access, not `workspace-write`. The narrower mode blocks network and blocks commits in a linked git worktree, whose gitdir lies outside the workspace.
+
 ### Session resume
 
 Pass `--resume <id>` (or `AgentRunRequest(resume=...)`) to continue an existing

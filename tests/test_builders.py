@@ -733,3 +733,41 @@ def test_concurrent_runs_in_one_workspace_get_distinct_prompt_files(
         AgentRunRequest(engine=engine, prompt="task B", workspace=tmp_path), "none"
     )
     assert a.prompt_path != b.prompt_path
+
+
+def test_write_access_defaults_off_for_codex_and_claude(tmp_path):
+    req = AgentRunRequest(engine="codex", prompt="x", workspace=tmp_path)
+    assert "--sandbox" not in CodexBuilder().build_invocation(req, "none").argv
+    req = AgentRunRequest(engine="claude-code", prompt="x", workspace=tmp_path)
+    assert (
+        "--permission-mode"
+        not in ClaudeCodeBuilder().build_invocation(req, "none").argv
+    )
+
+
+def test_codex_write_access_uses_full_access_sandbox(tmp_path):
+    req = AgentRunRequest(
+        engine="codex", prompt="x", workspace=tmp_path, write_access=True
+    )
+    argv = CodexBuilder().build_invocation(req, "none").argv
+    i = argv.index("--sandbox")
+    assert argv[i + 1] == "danger-full-access"
+    assert argv[-1] == "x"
+
+
+def test_claude_write_access_bypasses_permissions(tmp_path):
+    req = AgentRunRequest(
+        engine="claude-code", prompt="x", workspace=tmp_path, write_access=True
+    )
+    argv = ClaudeCodeBuilder().build_invocation(req, "none").argv
+    i = argv.index("--permission-mode")
+    assert argv[i + 1] == "bypassPermissions"
+
+
+def test_opencode_write_access_adds_auto(tmp_path):
+    req = AgentRunRequest(
+        engine="opencode", prompt="x", workspace=tmp_path, write_access=True
+    )
+    argv = OpenCodeBuilder().build_invocation(req, "env-key").argv
+    assert "--auto" in argv
+    assert argv[-1] == "x"

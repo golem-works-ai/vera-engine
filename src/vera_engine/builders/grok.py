@@ -48,6 +48,7 @@ class GrokBuilder(EngineBuilder):
             str(prompt_path),
             "--output-format",
             output_format,
+            # Always on, so grok honors write_access=True by default.
             "--always-approve",
         ]
 
