@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from abc import ABC, abstractmethod
 
 from vera_engine.invocation import EngineInvocation, EngineUsageReport
 from vera_engine.request import AgentRunRequest
 
 logger = logging.getLogger(__name__)
+
+
+def per_run_filename(prefix: str, suffix: str) -> str:
+    """Return a workspace-relative filename unique to one run.
+
+    Concurrent runs sharing a workspace must not collide on materialized
+    files (issue #28): a fixed name lets one run read another's prompt and
+    lets the first run's cleanup delete a file a sibling has not read yet.
+    """
+    return f"{prefix}-{uuid.uuid4().hex}{suffix}"
 
 
 def parse_usage_report_json(

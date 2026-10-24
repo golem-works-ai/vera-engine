@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+from vera_engine.builders.claude_code import ClaudeCodeBuilder
 from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
 from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.render.local import (
@@ -15,6 +16,7 @@ from vera_engine.render.local import (
     _resolve_env,
     render_local,
 )
+from vera_engine.request import AgentRunRequest
 
 # --- _resolve_env ---
 
@@ -286,6 +288,33 @@ def test_render_local_materializes_and_cleans_up_files(tmp_path):
     result = render_local(inv, CredentialBundle(values={}))
     assert result.stdout == "task text"
     assert not (tmp_path / "prompt.md").exists()
+
+
+def test_render_local_cleanup_leaves_sibling_run_files(tmp_path):
+    builder = ClaudeCodeBuilder()
+    a = builder.build_invocation(
+        AgentRunRequest(engine="claude-code", prompt="task A", workspace=tmp_path),
+        "none",
+    )
+    b = builder.build_invocation(
+        AgentRunRequest(engine="claude-code", prompt="task B", workspace=tmp_path),
+        "none",
+    )
+    # B's file is materialized up front, as if B's run is already in flight.
+    _materialize_files(b.files, tmp_path, {})
+
+    inv = EngineInvocation(
+        engine=a.engine,
+        argv=("true",),
+        env={},
+        workdir=a.workdir,
+        home_strategy="real",
+        files=a.files,
+    )
+    render_local(inv, CredentialBundle(values={}))
+
+    assert b.prompt_path.exists()
+    assert not a.prompt_path.exists()
 
 
 def test_render_local_keeps_no_cleanup_files(tmp_path):

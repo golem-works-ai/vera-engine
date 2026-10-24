@@ -1,13 +1,13 @@
 """Tests for per-engine EngineBuilder implementations."""
 
 import json
+import re
 
 import pytest
 
 from vera_engine.builders.base import EngineBuilder
-from vera_engine.builders.claude_code import DEFAULT_PROMPT_FILENAME, ClaudeCodeBuilder
+from vera_engine.builders.claude_code import ClaudeCodeBuilder
 from vera_engine.builders.codex import CodexBuilder
-from vera_engine.builders.grok import DEFAULT_PROMPT_FILENAME as GROK_PROMPT_FILENAME
 from vera_engine.builders.grok import GrokBuilder
 from vera_engine.builders.opencode import OpenCodeBuilder
 from vera_engine.credentials import SecretRef
@@ -91,7 +91,11 @@ def test_claude_code_env_key_strategy(tmp_path):
     )
     inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
 
-    expected_prompt_path = tmp_path / DEFAULT_PROMPT_FILENAME
+    assert len(inv.files) == 1
+    assert re.fullmatch(
+        r"\.vera-engine-claude-prompt-[0-9a-f]{32}\.md", inv.files[0].relative_path
+    )
+    expected_prompt_path = tmp_path / inv.files[0].relative_path
     assert inv.argv == ("claude", "-p", str(expected_prompt_path), "--verbose")
     assert inv.env["ANTHROPIC_API_KEY"] == SecretRef("ANTHROPIC_API_KEY")
     assert "ANTHROPIC_BASE_URL" not in inv.env
@@ -99,8 +103,6 @@ def test_claude_code_env_key_strategy(tmp_path):
     assert inv.workdir == tmp_path
     assert inv.home_strategy == "hermetic"
     assert inv.prompt_path == expected_prompt_path
-    assert len(inv.files) == 1
-    assert inv.files[0].relative_path == DEFAULT_PROMPT_FILENAME
     assert inv.files[0].content == "do the thing"
 
 
@@ -300,6 +302,15 @@ def test_opencode_proxy_strategy_adds_config_file(tmp_path):
     config = json.loads(config_file.content)
     assert config == {"provider": {"base_url": "$ANTHROPIC_BASE_URL"}}
     assert config_file.expand_references is True
+
+    assert config_file.relative_path != "opencode.json"
+    assert re.fullmatch(
+        r"\.vera-engine-opencode-config-[0-9a-f]{32}\.json", config_file.relative_path
+    )
+    assert inv.env["OPENCODE_CONFIG"] == str(tmp_path / config_file.relative_path)
+
+    other_inv = OpenCodeBuilder().build_invocation(req, "proxy")
+    assert other_inv.files[0].relative_path != config_file.relative_path
 
 
 def test_opencode_unsupported_strategy_raises(tmp_path):
@@ -512,7 +523,11 @@ def test_grok_env_key_strategy(tmp_path):
     req = AgentRunRequest(engine="grok", prompt="do the thing", workspace=tmp_path)
     inv = GrokBuilder().build_invocation(req, "env-key")
 
-    expected_prompt_path = tmp_path / GROK_PROMPT_FILENAME
+    assert len(inv.files) == 1
+    assert re.fullmatch(
+        r"\.vera-engine-grok-prompt-[0-9a-f]{32}\.md", inv.files[0].relative_path
+    )
+    expected_prompt_path = tmp_path / inv.files[0].relative_path
     assert inv.argv[0] == "grok"
     assert "--prompt-file" in inv.argv
     assert inv.argv[inv.argv.index("--prompt-file") + 1] == str(expected_prompt_path)
@@ -524,7 +539,6 @@ def test_grok_env_key_strategy(tmp_path):
     assert inv.env["XAI_API_KEY"] == SecretRef("XAI_API_KEY")
     assert inv.home_strategy == "hermetic"
     assert inv.prompt_path == expected_prompt_path
-    assert len(inv.files) == 1
     assert inv.files[0].content == "do the thing"
 
 
@@ -703,3 +717,19 @@ def test_claude_code_parse_usage_report_no_warning_when_fields_present(caplog):
     with caplog.at_level("WARNING", logger="vera_engine.builders.base"):
         ClaudeCodeBuilder().parse_usage_report(_claude_usage_stdout())
     assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    "builder,engine", [(GrokBuilder(), "grok"), (ClaudeCodeBuilder(), "claude-code")]
+)
+def test_concurrent_runs_in_one_workspace_get_distinct_prompt_files(
+    builder, engine, tmp_path
+):
+    """Two runs sharing a workspace must not write their prompts to the same file."""
+    a = builder.build_invocation(
+        AgentRunRequest(engine=engine, prompt="task A", workspace=tmp_path), "none"
+    )
+    b = builder.build_invocation(
+        AgentRunRequest(engine=engine, prompt="task B", workspace=tmp_path), "none"
+    )
+    assert a.prompt_path != b.prompt_path
