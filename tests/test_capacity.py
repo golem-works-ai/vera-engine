@@ -752,7 +752,7 @@ def test_subscription_probe_logs_raw_body_on_unexpected_status(caplog):
 
 
 def test_subscription_probe_no_warning_on_success(caplog):
-    headers = _make_headers()
+    headers = _unified_headers()
     with (
         patch("vera_engine.capacity._anthropic_oauth_token", return_value="tok"),
         patch(
