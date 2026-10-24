@@ -75,6 +75,9 @@ Anthropic remaining comes from unified 5h and 7d rate-limit headers on a
 1-token Haiku probe. Run `python -m vera_engine capacity --refresh` to query
 the providers immediately.
 
+OpenAI remaining quota comes from the ChatGPT login.
+`OPENAI_API_KEY` is the fallback when that login is missing or below 5%.
+
 ## Adding an Engine
 
 Create a new file in `src/vera_engine/builders/` implementing `EngineBuilder`. Register it in `src/vera_engine/selection.py`. That's it.

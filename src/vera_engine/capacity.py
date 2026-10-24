@@ -5,7 +5,9 @@ Anthropic: 1-token Haiku ``POST /v1/messages`` and parse
 ``anthropic-ratelimit-unified-{5h,7d}-*`` response headers.
 xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
 ``grok models`` is the fallback when tmux or ``/usage`` cannot produce a percent.
-OpenAI (Codex): launch interactive TUI in tmux, send ``/status``, parse output.
+OpenAI (Codex): ChatGPT ``GET /backend-api/wham/usage`` for the login in
+``~/.codex/auth.json``. The ``/status`` TUI is the fallback.
+Subscription is probed before ``OPENAI_API_KEY``.
 """
 
 from __future__ import annotations
@@ -119,6 +121,8 @@ def check_anthropic() -> ProviderCapacity:
 # Vera runners set ANTHROPIC_BASE_URL to the internal proxy, which 401s
 # setup-tokens. This probe must hit Anthropic directly.
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+_CODEX_USAGE_TIMEOUT_SECONDS = 15
 _HAIKU_PROBE_MODEL = "claude-haiku-4-5-20251001"
 _ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
 _CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
@@ -330,14 +334,189 @@ def _parse_reset(
 
 
 def check_openai() -> ProviderCapacity:
-    key = os.environ.get("OPENAI_API_KEY")
-    if key:
-        return ProviderCapacity("openai", available=True, detail="API key set")
-    cap = _check_codex_status()
-    if cap is not None:
-        return cap
+    sub = _check_codex_subscription()
+    if _prefer_subscription(sub):
+        return sub
+    if os.environ.get("OPENAI_API_KEY"):
+        return _api_key_capacity("openai")
+    return sub
+
+
+def _codex_home() -> Path:
+    raw = os.environ.get("CODEX_HOME", "").strip()
+    if raw:
+        return Path(raw)
+    return Path.home() / ".codex"
+
+
+def _codex_chatgpt_auth() -> tuple[str, str] | None:
+    """Return the ChatGPT access token and account id, when both are stored."""
+    try:
+        data = json.loads((_codex_home() / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("auth_mode") not in (None, "chatgpt"):
+        return None
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict):
+        return None
+    token = tokens.get("access_token")
+    account_id = tokens.get("account_id")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    if not isinstance(account_id, str) or not account_id.strip():
+        return None
+    return token.strip(), account_id.strip()
+
+
+def _check_codex_subscription() -> ProviderCapacity:
+    """Probe the ChatGPT usage API, then the Codex TUI."""
+    usage = _check_codex_usage()
+    if usage is not None:
+        return usage
+    tui = _check_codex_status()
+    if tui is not None:
+        return tui
+    return ProviderCapacity("openai", available=False, detail="not on subscription")
+
+
+def _check_codex_usage() -> ProviderCapacity | None:
+    """Read remaining Codex quota from ``GET /backend-api/wham/usage``."""
+    auth = _codex_chatgpt_auth()
+    if auth is None:
+        return None
+    token, account_id = auth
+    req = urllib.request.Request(
+        _CODEX_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "ChatGPT-Account-Id": account_id,
+            "Accept": "application/json",
+            "User-Agent": "codex-cli",
+        },
+    )
+    try:
+        with _urlopen(req, timeout=_CODEX_USAGE_TIMEOUT_SECONDS) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return ProviderCapacity(
+                "openai", available=False, detail="not on subscription"
+            )
+        logger.warning("codex usage check HTTP %s", exc.code)
+        return None
+    except TimeoutError:
+        logger.warning("codex usage check timed out")
+        return None
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
+        logger.warning("codex usage check failed: %s", exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return _parse_codex_usage(payload)
+
+
+def _as_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+@dataclass(frozen=True)
+class _CodexWindow:
+    window_name: str
+    remaining_pct: float
+    token_used_pct: float
+    window_used_pct: float | None
+    pressure: float
+
+
+def _codex_window_name(seconds: float | None) -> str:
+    if seconds is not None and seconds >= 2 * 24 * 3600:
+        return "week"
+    return "session"
+
+
+def _parse_codex_window(window: object, *, now: datetime) -> _CodexWindow | None:
+    if not isinstance(window, dict):
+        return None
+    used = _as_float(window.get("used_percent"))
+    if used is None:
+        return None
+    used = max(0.0, min(100.0, used))
+    remaining = 100.0 - used
+    seconds = _as_float(window.get("limit_window_seconds"))
+    duration = timedelta(seconds=seconds) if seconds is not None and seconds > 0 else None
+    reset_at = _as_float(window.get("reset_at"))
+    window_used = None
+    if duration is not None and reset_at is not None:
+        window_used = _window_used_pct(
+            datetime.fromtimestamp(reset_at, tz=UTC), duration, now
+        )
+    pressure_time = window_used if window_used is not None else 0.0
+    return _CodexWindow(
+        window_name=_codex_window_name(seconds),
+        remaining_pct=remaining,
+        token_used_pct=used,
+        window_used_pct=window_used,
+        pressure=_usage_pressure(remaining, pressure_time),
+    )
+
+
+def _parse_codex_usage(
+    payload: object, *, now: datetime | None = None
+) -> ProviderCapacity | None:
+    """Extract the tighter Codex window from a ``/wham/usage`` payload.
+
+    Returns None when the payload has no plan and no window.
+    """
+    if not isinstance(payload, dict):
+        return None
+    plan = payload.get("plan_type")
+    plan_name = plan.strip() if isinstance(plan, str) and plan.strip() else "unknown"
+    rate = payload.get("rate_limit")
+    if not isinstance(rate, dict):
+        if plan_name == "unknown":
+            return None
+        return ProviderCapacity(
+            "openai",
+            available=True,
+            detail=f"codex {plan_name}: subscription active, usage unknown",
+            auth_method="oauth",
+        )
+
+    current = now or datetime.now(UTC)
+    readings = [
+        reading
+        for reading in (
+            _parse_codex_window(rate.get("primary_window"), now=current),
+            _parse_codex_window(rate.get("secondary_window"), now=current),
+        )
+        if reading is not None
+    ]
+    if not readings:
+        return ProviderCapacity(
+            "openai",
+            available=True,
+            detail=f"codex {plan_name}: subscription active, usage unknown",
+            auth_method="oauth",
+        )
+
+    chosen = min(readings, key=lambda reading: reading.pressure)
+    parts = [f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings]
+    allowed = rate.get("allowed", True)
+    limit_reached = rate.get("limit_reached") is True
     return ProviderCapacity(
-        "openai", available=False, detail="no key and codex status unavailable"
+        "openai",
+        available=chosen.remaining_pct > 2 and allowed is not False and not limit_reached,
+        remaining_pct=chosen.remaining_pct,
+        detail=f"codex {plan_name}: {', '.join(parts)} remaining",
+        auth_method="oauth",
+        token_used_pct=chosen.token_used_pct,
+        window_used_pct=chosen.window_used_pct,
+        window_name=chosen.window_name,
     )
 
 
@@ -413,16 +592,33 @@ def _check_codex_status() -> ProviderCapacity | None:
 
     _tmux_kill(_TMUX_SESSION)
     try:
+        # Drop OPENAI_API_KEY so /status reports the ChatGPT weekly limit.
+        env = os.environ.copy()
+        env.pop("OPENAI_API_KEY", None)
         r = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", _TMUX_SESSION, "-x", "120", "-y", "40"],
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                _TMUX_SESSION,
+                "-x",
+                "120",
+                "-y",
+                "40",
+                "--",
+                "env",
+                "-u",
+                "OPENAI_API_KEY",
+                "codex",
+            ],
             capture_output=True,
             timeout=5,
+            env=env,
             check=False,
         )
         if r.returncode != 0:
             return None
-
-        _tmux_send(_TMUX_SESSION, "codex", "Enter")
 
         # Wait for codex to finish starting (handle update prompt).
         # The update prompt is a TUI select menu — arrow-key Down to

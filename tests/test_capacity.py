@@ -14,9 +14,14 @@ from vera_engine.capacity import (
     ProviderCapacity,
     _ANTHROPIC_MESSAGES_URL,
     _HAIKU_PROBE_MODEL,
+    _check_codex_status,
+    _check_codex_subscription,
+    _check_codex_usage,
     _check_grok_usage,
+    _codex_chatgpt_auth,
     _parse_anthropic_rate_headers,
     _parse_codex_status,
+    _parse_codex_usage,
     _parse_grok_models,
     _parse_grok_usage,
     _usage_pressure,
@@ -384,38 +389,326 @@ def test_parse_codex_status_empty():
     assert _parse_codex_status("") is None
 
 
-def test_check_openai_with_key():
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
-        cap = check_openai()
+CODEX_USAGE_WEEKLY = {
+    "plan_type": "prolite",
+    "rate_limit": {
+        "allowed": True,
+        "limit_reached": False,
+        "primary_window": {
+            "used_percent": 2,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 585130,
+            "reset_at": 1_800_000_000,
+        },
+        "secondary_window": None,
+    },
+}
+
+CODEX_USAGE_BOTH = {
+    "plan_type": "plus",
+    "rate_limit": {
+        "allowed": True,
+        "limit_reached": False,
+        "primary_window": {
+            "used_percent": 90,
+            "limit_window_seconds": 18000,
+            "reset_at": 1_800_000_000,
+        },
+        "secondary_window": {
+            "used_percent": 10,
+            "limit_window_seconds": 604800,
+            "reset_at": 1_800_000_000,
+        },
+    },
+}
+
+
+def test_parse_codex_usage_weekly_primary():
+    now = datetime.fromtimestamp(1_800_000_000, tz=UTC) - timedelta(
+        seconds=int(604800 * 0.7)
+    )
+    cap = _parse_codex_usage(CODEX_USAGE_WEEKLY, now=now)
+    assert cap is not None
     assert cap.available is True
-    assert cap.provider == "openai"
+    assert cap.remaining_pct == 98.0
+    assert cap.token_used_pct == 2.0
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(30.0, abs=0.1)
+    assert cap.auth_method == "oauth"
+    assert "prolite" in cap.detail
+    assert "week 98%" in cap.detail
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(98.0, 30.0), abs=0.01)
 
 
-def test_check_openai_without_key_falls_back_to_codex():
+def test_parse_codex_usage_picks_tighter_window():
+    now = datetime.fromtimestamp(1_800_000_000 - 60, tz=UTC)
+    cap = _parse_codex_usage(CODEX_USAGE_BOTH, now=now)
+    assert cap is not None
+    assert cap.window_name == "session"
+    assert cap.remaining_pct == 10.0
+    assert "session 10%" in cap.detail
+    assert "week 90%" in cap.detail
+
+
+def test_parse_codex_usage_limit_reached():
+    payload = json.loads(json.dumps(CODEX_USAGE_WEEKLY))
+    payload["rate_limit"]["limit_reached"] = True
+    cap = _parse_codex_usage(payload)
+    assert cap is not None
+    assert cap.available is False
+    assert cap.remaining_pct == 98.0
+
+
+def test_parse_codex_usage_low_remaining():
+    payload = json.loads(json.dumps(CODEX_USAGE_WEEKLY))
+    payload["rate_limit"]["primary_window"]["used_percent"] = 99
+    cap = _parse_codex_usage(payload)
+    assert cap is not None
+    assert cap.available is False
+    assert cap.remaining_pct == 1.0
+
+
+def test_parse_codex_usage_plan_without_windows():
+    cap = _parse_codex_usage({"plan_type": "plus", "rate_limit": {}})
+    assert cap is not None
+    assert cap.available is True
+    assert cap.remaining_pct is None
+    assert cap.auth_method == "oauth"
+    assert "usage unknown" in cap.detail
+
+
+def test_parse_codex_usage_empty():
+    assert _parse_codex_usage({}) is None
+    assert _parse_codex_usage("nope") is None
+
+
+def test_codex_chatgpt_auth_reads_login(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": None,
+                "tokens": {"access_token": "tok", "account_id": "acc"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _codex_chatgpt_auth() == ("tok", "acc")
+
+
+def test_codex_chatgpt_auth_ignores_api_key_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {
+                "auth_mode": "apikey",
+                "tokens": {"access_token": "tok", "account_id": "acc"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _codex_chatgpt_auth() is None
+
+
+def test_check_codex_usage_sends_chatgpt_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"access_token": "tok", "account_id": "acc"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def read(self) -> bytes:
+            return json.dumps(CODEX_USAGE_WEEKLY).encode()
+
+        def __enter__(self) -> "_Resp":
+            return self
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+    def fake_urlopen(req: object, timeout: float) -> _Resp:
+        captured["timeout"] = timeout
+        captured["url"] = req.full_url  # type: ignore[attr-defined]
+        captured["headers"] = {
+            key.lower(): value for key, value in req.header_items()  # type: ignore[attr-defined]
+        }
+        return _Resp()
+
+    with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+        cap = _check_codex_usage()
+    assert captured["url"] == "https://chatgpt.com/backend-api/wham/usage"
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert headers["authorization"] == "Bearer tok"
+    assert headers["chatgpt-account-id"] == "acc"
+    assert cap is not None
+    assert cap.remaining_pct == 98.0
+    assert cap.auth_method == "oauth"
+
+
+def test_check_codex_usage_unauthorized(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"access_token": "tok", "account_id": "acc"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    error = HTTPError(
+        "https://chatgpt.com/backend-api/wham/usage",
+        401,
+        "unauthorized",
+        Message(),
+        BytesIO(b""),
+    )
+    with patch("vera_engine.capacity._urlopen", side_effect=error):
+        cap = _check_codex_usage()
+    assert cap is not None
+    assert cap.available is False
+    assert "not on subscription" in cap.detail
+
+
+def test_codex_subscription_prefers_usage_api_over_tui():
+    usage = ProviderCapacity(
+        "openai",
+        available=True,
+        remaining_pct=98.0,
+        detail="codex prolite: week 98% remaining",
+        auth_method="oauth",
+    )
     with (
-        patch.dict(os.environ, {}, clear=True),
-        patch("vera_engine.capacity._check_codex_status") as mock_cs,
+        patch("vera_engine.capacity._check_codex_usage", return_value=usage),
+        patch("vera_engine.capacity._check_codex_status") as tui,
     ):
-        mock_cs.return_value = ProviderCapacity(
-            "openai",
-            available=True,
-            remaining_pct=99.0,
-            detail="codex Plus: 99% weekly left",
-            auth_method="oauth",
-        )
-        cap = check_openai()
-    assert cap.available is True
+        cap = _check_codex_subscription()
+    assert cap.remaining_pct == 98.0
+    tui.assert_not_called()
+
+
+def test_codex_subscription_falls_back_to_tui():
+    tui_cap = ProviderCapacity(
+        "openai",
+        available=True,
+        remaining_pct=99.0,
+        detail="codex Plus: 99% weekly left",
+        auth_method="oauth",
+    )
+    with (
+        patch("vera_engine.capacity._check_codex_usage", return_value=None),
+        patch("vera_engine.capacity._check_codex_status", return_value=tui_cap),
+    ):
+        cap = _check_codex_subscription()
     assert cap.remaining_pct == 99.0
     assert cap.auth_method == "oauth"
 
 
-def test_check_openai_without_key_codex_unavailable():
+def test_check_codex_status_strips_api_key():
+    with (
+        patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False),
+        patch("vera_engine.capacity.shutil.which", return_value="/usr/bin/bin"),
+        patch("vera_engine.capacity.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+        assert _check_codex_status() is None
+    new_sess = next(
+        call
+        for call in mock_run.call_args_list
+        if call.args and call.args[0][:2] == ["tmux", "new-session"]
+    )
+    argv = new_sess.args[0]
+    assert argv[-4:] == ["env", "-u", "OPENAI_API_KEY", "codex"]
+    env = new_sess.kwargs.get("env")
+    assert env is not None
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_check_openai_prefers_subscription_when_key_also_set():
+    sub = ProviderCapacity(
+        "openai",
+        available=True,
+        remaining_pct=98.0,
+        detail="codex prolite: week 98% remaining",
+        auth_method="oauth",
+    )
+    with (
+        patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True),
+        patch("vera_engine.capacity._check_codex_subscription", return_value=sub),
+    ):
+        cap = check_openai()
+    assert cap.available is True
+    assert cap.auth_method == "oauth"
+    assert cap.remaining_pct == 98.0
+
+
+def test_check_openai_falls_through_to_api_key_when_subscription_exhausted():
+    sub = ProviderCapacity(
+        "openai",
+        available=False,
+        remaining_pct=1.0,
+        detail="codex prolite: week 1% remaining",
+        auth_method="oauth",
+    )
+    with (
+        patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True),
+        patch("vera_engine.capacity._check_codex_subscription", return_value=sub),
+    ):
+        cap = check_openai()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+    assert "API key" in cap.detail
+
+
+def test_check_openai_falls_through_to_api_key_when_not_subscribed():
+    sub = ProviderCapacity("openai", available=False, detail="not on subscription")
+    with (
+        patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True),
+        patch("vera_engine.capacity._check_codex_subscription", return_value=sub),
+    ):
+        cap = check_openai()
+    assert cap.available is True
+    assert cap.auth_method == "api-key"
+
+
+def test_check_openai_without_key_uses_subscription():
+    sub = ProviderCapacity(
+        "openai",
+        available=True,
+        remaining_pct=98.0,
+        detail="codex prolite: week 98% remaining",
+        auth_method="oauth",
+    )
     with (
         patch.dict(os.environ, {}, clear=True),
-        patch("vera_engine.capacity._check_codex_status", return_value=None),
+        patch("vera_engine.capacity._check_codex_subscription", return_value=sub),
+    ):
+        cap = check_openai()
+    assert cap.available is True
+    assert cap.remaining_pct == 98.0
+    assert cap.auth_method == "oauth"
+
+
+def test_check_openai_without_key_codex_unavailable():
+    sub = ProviderCapacity("openai", available=False, detail="not on subscription")
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("vera_engine.capacity._check_codex_subscription", return_value=sub),
     ):
         cap = check_openai()
     assert cap.available is False
+    assert "not on subscription" in cap.detail
 
 
 GROK_MODELS_LOGGED_IN = """\
