@@ -9,6 +9,7 @@ import pytest
 
 from vera_engine.capacity import (
     ProviderCapacity,
+    _check_claude_code_subscription,
     _check_grok_usage,
     _parse_anthropic_rate_headers,
     _parse_codex_status,
@@ -295,6 +296,60 @@ def test_check_anthropic_no_token_no_key():
         cap = check_anthropic()
     assert cap.available is False
     assert "not on subscription" in cap.detail
+
+
+def test_subscription_probe_logs_raw_body_on_unauthorized(caplog):
+    """A revoked/broken token returns 401 and must not be a silent "not on
+    subscription" -- the raw body is logged so it's distinguishable from a
+    genuine non-subscription response."""
+    with (
+        patch("vera_engine.capacity._anthropic_oauth_token", return_value="tok"),
+        patch(
+            "vera_engine.capacity._post_anthropic_messages",
+            return_value=(
+                401,
+                Message(),
+                b'{"error": {"message": "invalid x-api-key"}}',
+            ),
+        ),
+        caplog.at_level("WARNING", logger="vera_engine.capacity"),
+    ):
+        cap = _check_claude_code_subscription()
+    assert cap.available is False
+    assert cap.detail == "not on subscription"
+    assert any("invalid x-api-key" in record.getMessage() for record in caplog.records)
+
+
+def test_subscription_probe_logs_raw_body_on_unexpected_status(caplog):
+    with (
+        patch("vera_engine.capacity._anthropic_oauth_token", return_value="tok"),
+        patch(
+            "vera_engine.capacity._post_anthropic_messages",
+            return_value=(500, Message(), b"internal server error"),
+        ),
+        caplog.at_level("WARNING", logger="vera_engine.capacity"),
+    ):
+        cap = _check_claude_code_subscription()
+    assert cap.available is False
+    assert "HTTP 500" in cap.detail
+    assert any(
+        "internal server error" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_subscription_probe_no_warning_on_success(caplog):
+    headers = _make_headers()
+    with (
+        patch("vera_engine.capacity._anthropic_oauth_token", return_value="tok"),
+        patch(
+            "vera_engine.capacity._post_anthropic_messages",
+            return_value=(200, headers, b""),
+        ),
+        caplog.at_level("WARNING", logger="vera_engine.capacity"),
+    ):
+        cap = _check_claude_code_subscription()
+    assert cap.available is True
+    assert caplog.records == []
 
 
 GROK_MODELS_LOGGED_IN = """\
