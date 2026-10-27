@@ -91,6 +91,13 @@ the providers immediately.
 OpenAI remaining quota comes from the ChatGPT login.
 `OPENAI_API_KEY` is the fallback when that login is missing or below 5%.
 
+OpenRouter remaining credits come from `GET /credits` under
+`OPENROUTER_BASE_URL`, default `https://openrouter.ai/api/v1`. Set that
+variable when OpenRouter traffic goes through a gateway, so the probe sends
+the gateway key to the gateway and never to openrouter.ai. A gateway that
+does not serve `/credits` still counts the key as usable, with the balance
+unknown. A 401 or 403 marks OpenRouter unavailable.
+
 ## Adding an Engine
 
 Create a new file in `src/vera_engine/builders/` implementing `EngineBuilder`. Register it in `src/vera_engine/selection.py`. That's it.

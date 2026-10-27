@@ -44,6 +44,10 @@ Do not reset these to 0.5 or 1.0.
 
 Do not add a `tenant.default_runtime` concept here. This package does not let a tenant pick the runtime.
 
+### OpenRouter
+
+The capacity probe calls `GET /credits` under `OPENROUTER_BASE_URL`, default openrouter.ai. A gateway in front of OpenRouter sets that variable so its key never reaches openrouter.ai. Do not add a gateway-specific key name here.
+
 ### Grok
 
 Do not add a grok-4.5 catalog row.
