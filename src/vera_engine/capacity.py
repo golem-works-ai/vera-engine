@@ -1,6 +1,7 @@
 """Collect remaining capacity from each provider.
 
-OpenRouter: REST API for credit balance.
+OpenRouter: ``GET /credits`` at ``OPENROUTER_BASE_URL`` (default openrouter.ai).
+A gateway base without that endpoint still counts the key as usable.
 Anthropic: 1-token Haiku ``POST /v1/messages`` and parse
 ``anthropic-ratelimit-unified-{5h,7d}-*`` response headers.
 xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
@@ -27,7 +28,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+_OPENROUTER_PROBE_TIMEOUT_SECONDS = 5
 _CAPACITY_CACHE_TTL_SECONDS = 30 * 60
 _CAPACITY_CACHE_PATH = Path.home() / ".cache" / "vera-engine" / "capacity.json"
 
@@ -58,37 +60,66 @@ class ProviderCapacity:
         return _usage_pressure(remaining_pct, self.window_used_pct)
 
 
+def openrouter_base_url() -> str:
+    """Where OpenRouter is reached: ``OPENROUTER_BASE_URL`` or openrouter.ai.
+
+    A caller that routes OpenRouter traffic through a gateway sets this to the
+    gateway's OpenRouter base. The capacity probe then sends the key only to
+    that gateway, never to openrouter.ai, because a gateway key is not an
+    OpenRouter key.
+    """
+    base = os.environ.get("OPENROUTER_BASE_URL") or OPENROUTER_DEFAULT_BASE_URL
+    return base.rstrip("/")
+
+
 def check_openrouter() -> ProviderCapacity:
     key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get(
         "PROXY_OPENROUTER_API_KEY"
     )
     if not key:
         return ProviderCapacity("openrouter", available=False, detail="no key")
+    base = openrouter_base_url()
     try:
         req = urllib.request.Request(
-            OPENROUTER_CREDITS_URL,
+            f"{base}/credits",
             headers={
                 "Authorization": f"Bearer {key}",
                 "Accept": "application/json",
                 "User-Agent": "vera-engine",
             },
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=_OPENROUTER_PROBE_TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read()).get("data", {})
-        total = float(data.get("total_credits", 0))
-        used = float(data.get("total_usage", 0))
-        remaining = total - used
+        remaining = float(data.get("total_credits", 0)) - float(
+            data.get("total_usage", 0)
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return ProviderCapacity(
+                "openrouter",
+                available=False,
+                detail=f"key rejected by {base} ({exc.code})",
+            )
+        # A gateway that forwards completions need not serve /credits. The key
+        # was accepted as far as the gateway is concerned, so the rows stay
+        # usable; only the balance is unknown.
+        logger.info("OpenRouter credits endpoint missing at %s: %s", base, exc)
         return ProviderCapacity(
             "openrouter",
-            available=remaining > 0.01,
-            remaining_usd=remaining,
-            detail=f"${remaining:.2f} remaining",
+            available=True,
+            detail=f"key present; no credits endpoint at {base} ({exc.code})",
         )
     except Exception as exc:  # noqa: BLE001 - probe failure is reported or ignored, never raised
         logger.warning("OpenRouter credits check failed: %s", exc)
         return ProviderCapacity(
-            "openrouter", available=bool(key), detail=f"check failed: {exc}"
+            "openrouter", available=True, detail=f"check failed: {exc}"
         )
+    return ProviderCapacity(
+        "openrouter",
+        available=remaining > 0.01,
+        remaining_usd=remaining,
+        detail=f"${remaining:.2f} remaining",
+    )
 
 
 _SUBSCRIPTION_MIN_PCT = 5.0

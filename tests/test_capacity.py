@@ -29,6 +29,7 @@ from vera_engine.capacity import (
     check_all,
     check_anthropic,
     check_openai,
+    check_openrouter,
     check_xai,
 )
 
@@ -1041,3 +1042,87 @@ def test_check_all_reuses_fresh_disk_cache():
         assert check_all()["anthropic"] == fake
 
     anthropic.assert_called_once()
+
+
+def _openrouter_env(monkeypatch, *, base: str | None, key: str | None = "or-key"):
+    for name in ("OPENROUTER_API_KEY", "PROXY_OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    if key is not None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", key)
+    if base is not None:
+        monkeypatch.setenv("OPENROUTER_BASE_URL", base)
+
+
+def _http_error(url: str, code: int) -> HTTPError:
+    return HTTPError(url, code, "nope", Message(), BytesIO(b""))
+
+
+def test_check_openrouter_probes_openrouter_ai_by_default(monkeypatch):
+    _openrouter_env(monkeypatch, base=None)
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["auth"] = req.get_header("Authorization")
+        body = json.dumps({"data": {"total_credits": 10.0, "total_usage": 2.5}}).encode()
+        return _FakeResponse({}, body=body)
+
+    with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+        cap = check_openrouter()
+
+    assert seen["url"] == "https://openrouter.ai/api/v1/credits"
+    assert seen["auth"] == "Bearer or-key"
+    assert cap.available is True
+    assert cap.remaining_usd == pytest.approx(7.5)
+
+
+def test_check_openrouter_sends_the_key_only_to_the_configured_base(monkeypatch):
+    """A gateway key must never reach openrouter.ai."""
+    _openrouter_env(monkeypatch, base="https://proxy.example/openrouter/v1/")
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        raise _http_error(req.full_url, 405)
+
+    with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+        cap = check_openrouter()
+
+    assert seen["url"] == "https://proxy.example/openrouter/v1/credits"
+    assert cap.available is True
+    assert cap.remaining_usd is None
+    assert "no credits endpoint" in cap.detail
+
+
+def test_check_openrouter_rejected_key_is_unavailable(monkeypatch):
+    _openrouter_env(monkeypatch, base=None)
+
+    def fake_urlopen(req, timeout=None):
+        raise _http_error(req.full_url, 401)
+
+    with patch("vera_engine.capacity._urlopen", side_effect=fake_urlopen):
+        cap = check_openrouter()
+
+    assert cap.available is False
+    assert "rejected" in cap.detail
+
+
+def test_check_openrouter_without_a_key_is_unavailable(monkeypatch):
+    _openrouter_env(monkeypatch, base="https://proxy.example/openrouter/v1", key=None)
+
+    with patch("vera_engine.capacity._urlopen", side_effect=AssertionError("no probe")):
+        cap = check_openrouter()
+
+    assert cap.available is False
+    assert cap.detail == "no key"
+
+
+def test_check_openrouter_network_failure_keeps_the_key_usable(monkeypatch):
+    _openrouter_env(monkeypatch, base=None)
+
+    with patch("vera_engine.capacity._urlopen", side_effect=OSError("timed out")):
+        cap = check_openrouter()
+
+    assert cap.available is True
+    assert "check failed" in cap.detail
+
