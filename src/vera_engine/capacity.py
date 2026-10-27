@@ -46,16 +46,16 @@ class ProviderCapacity:
 
     @property
     def usage_pressure(self) -> float | None:
-        """Return remaining-quota pressure relative to elapsed window time."""
+        """Return quota used relative to elapsed window time. Below 1 is healthy."""
         if self.window_used_pct is None:
             return None
-        if self.remaining_pct is not None:
-            remaining_pct = self.remaining_pct
-        elif self.token_used_pct is not None:
-            remaining_pct = 100.0 - self.token_used_pct
+        if self.token_used_pct is not None:
+            used_pct = self.token_used_pct
+        elif self.remaining_pct is not None:
+            used_pct = 100.0 - self.remaining_pct
         else:
             return None
-        return _usage_pressure(remaining_pct, self.window_used_pct)
+        return _usage_pressure(used_pct, self.window_used_pct)
 
 
 def check_openrouter() -> ProviderCapacity:
@@ -135,11 +135,11 @@ _UNIFIED_WINDOWS = (
 )
 
 
-def _usage_pressure(remaining_pct: float, window_used_pct: float) -> float:
-    """remaining_frac / (elapsed_frac * 0.9 + 0.05). Higher is healthier."""
-    remaining = remaining_pct / 100.0
+def _usage_pressure(used_pct: float, window_used_pct: float) -> float:
+    """used_frac / (elapsed_frac * 0.9 + 0.05). Lower is healthier."""
+    used = used_pct / 100.0
     time_used = window_used_pct / 100.0
-    return remaining / (time_used * _PRESSURE_SLOPE + _PRESSURE_FLOOR)
+    return used / (time_used * _PRESSURE_SLOPE + _PRESSURE_FLOOR)
 
 
 def _anthropic_oauth_token() -> str | None:
@@ -281,7 +281,7 @@ class _UnifiedWindow:
 def _parse_anthropic_rate_headers(
     headers: object, *, now: datetime | None = None
 ) -> ProviderCapacity:
-    """Pick the 5h/7d window with larger remaining/time pressure."""
+    """Pick the 5h/7d window with larger used/time pressure."""
     mapped = _header_map(headers)
     current_time = now or datetime.now(UTC)
     readings: list[_UnifiedWindow] = []
@@ -306,7 +306,7 @@ def _parse_anthropic_rate_headers(
                 token_used_pct=utilization * 100.0,
                 window_used_pct=window_used,
                 status=mapped.get(f"{prefix}-status", ""),
-                pressure=_usage_pressure(remaining_pct, window_used),
+                pressure=_usage_pressure(utilization * 100.0, window_used),
             )
         )
 
@@ -487,7 +487,7 @@ def _parse_codex_window(window: object, *, now: datetime) -> _CodexWindow | None
         remaining_pct=remaining,
         token_used_pct=used,
         window_used_pct=window_used,
-        pressure=_usage_pressure(remaining, pressure_time),
+        pressure=_usage_pressure(used, pressure_time),
     )
 
 
@@ -530,7 +530,7 @@ def _parse_codex_usage(
             auth_method="oauth",
         )
 
-    chosen = min(readings, key=lambda reading: reading.pressure)
+    chosen = max(readings, key=lambda reading: reading.pressure)
     parts = [f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings]
     allowed = rate.get("allowed", True)
     limit_reached = rate.get("limit_reached") is True

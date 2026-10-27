@@ -70,4 +70,4 @@ Use `CLAUDE_CODE_OAUTH_TOKEN` or `~/.claude/.credentials.json`. Do not send the 
 
 Hit `https://api.anthropic.com` directly. Do not follow `ANTHROPIC_BASE_URL`.
 
-Parse `anthropic-ratelimit-unified-{5h,7d}-*` headers. Pressure is remaining / (elapsed * 0.9 + 0.05). Report the window with the larger pressure.
+Parse `anthropic-ratelimit-unified-{5h,7d}-*` headers. Pressure is used / (elapsed * 0.9 + 0.05). Below 1 is healthy. Report the window with the larger pressure.
