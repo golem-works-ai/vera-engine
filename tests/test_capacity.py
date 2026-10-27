@@ -1016,10 +1016,7 @@ def test_check_grok_usage_strips_api_key_and_uses_dedicated_session():
     assert "XAI_API_KEY" not in env
 
 
-def test_check_all_includes_xai(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "vera_engine.capacity._CAPACITY_CACHE_PATH", tmp_path / "capacity.json"
-    )
+def test_check_all_includes_xai():
     fake = ProviderCapacity("xai", available=False, detail="stub")
     with (
         patch("vera_engine.capacity.check_anthropic", return_value=fake),
@@ -1031,9 +1028,7 @@ def test_check_all_includes_xai(tmp_path, monkeypatch):
     assert set(caps) == {"anthropic", "openrouter", "openai", "xai"}
 
 
-def test_check_all_reuses_fresh_disk_cache(tmp_path, monkeypatch):
-    cache_path = tmp_path / "capacity.json"
-    monkeypatch.setattr("vera_engine.capacity._CAPACITY_CACHE_PATH", cache_path)
+def test_check_all_reuses_fresh_disk_cache():
     fake = ProviderCapacity("xai", available=True, detail="cached")
 
     with (
