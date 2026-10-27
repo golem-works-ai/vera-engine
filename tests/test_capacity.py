@@ -76,7 +76,7 @@ def _unified_headers(
     }
 
 
-def test_usage_pressure_is_remaining_over_elapsed_window():
+def test_usage_pressure_is_used_over_elapsed_window():
     cap = ProviderCapacity(
         "xai",
         available=True,
@@ -85,58 +85,58 @@ def test_usage_pressure_is_remaining_over_elapsed_window():
         window_used_pct=40.0,
         window_name="week",
     )
-    assert cap.usage_pressure == pytest.approx(0.47 / (0.40 * 0.9 + 0.05))
+    assert cap.usage_pressure == pytest.approx(0.53 / (0.40 * 0.9 + 0.05))
 
 
-def test_usage_pressure_falls_back_to_token_used_when_remaining_absent():
+def test_usage_pressure_falls_back_to_remaining_when_token_used_absent():
     cap = ProviderCapacity(
         "anthropic",
         available=True,
-        token_used_pct=45.0,
+        remaining_pct=55.0,
         window_used_pct=30.0,
     )
-    assert cap.usage_pressure == pytest.approx(0.55 / (0.30 * 0.9 + 0.05))
+    assert cap.usage_pressure == pytest.approx(0.45 / (0.30 * 0.9 + 0.05))
 
 
-def test_parse_anthropic_headers_picks_week_when_its_pressure_is_larger():
+def test_parse_anthropic_headers_picks_session_when_its_pressure_is_larger():
     cap = _parse_anthropic_rate_headers(_unified_headers(), now=_NOW)
     assert cap.available is True
     assert cap.auth_method == "oauth"
-    assert cap.remaining_pct == pytest.approx(98.0)
-    assert cap.token_used_pct == pytest.approx(2.0)
-    assert cap.window_name == "week"
+    assert cap.remaining_pct == pytest.approx(93.0)
+    assert cap.token_used_pct == pytest.approx(7.0)
+    assert cap.window_name == "session"
     assert cap.window_used_pct == pytest.approx(50.0, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(0.98 / (0.50 * 0.9 + 0.05), abs=0.01)
+    assert cap.usage_pressure == pytest.approx(0.07 / (0.50 * 0.9 + 0.05), abs=0.01)
     assert "session 93%" in cap.detail
     assert "week 98%" in cap.detail
 
 
-def test_parse_anthropic_headers_picks_session_when_its_pressure_is_larger():
+def test_parse_anthropic_headers_picks_week_when_its_pressure_is_larger():
     headers = _unified_headers(
         util_5h="0.10",
         util_7d="0.50",
         reset_5h=_RESET_5H_EARLY,
     )
     cap = _parse_anthropic_rate_headers(headers, now=_NOW)
-    assert cap.remaining_pct == pytest.approx(90.0)
-    assert cap.token_used_pct == pytest.approx(10.0)
-    assert cap.window_name == "session"
-    assert cap.window_used_pct == pytest.approx(20.0, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(0.90 / (0.20 * 0.9 + 0.05), abs=0.01)
+    assert cap.remaining_pct == pytest.approx(50.0)
+    assert cap.token_used_pct == pytest.approx(50.0)
+    assert cap.window_name == "week"
+    assert cap.window_used_pct == pytest.approx(50.0, abs=0.1)
+    assert cap.usage_pressure == pytest.approx(0.50 / (0.50 * 0.9 + 0.05), abs=0.01)
 
 
-def test_parse_anthropic_headers_uses_healthier_window_even_if_other_is_exhausted():
+def test_parse_anthropic_headers_reports_tighter_window_even_if_other_is_healthy():
     headers = _unified_headers(util_5h="0.99", util_7d="0.10")
     cap = _parse_anthropic_rate_headers(headers, now=_NOW)
-    assert cap.available is True
-    assert cap.remaining_pct == pytest.approx(90.0)
-    assert cap.window_name == "week"
+    assert cap.available is False
+    assert cap.remaining_pct == pytest.approx(1.0)
+    assert cap.window_name == "session"
 
 
-def test_parse_anthropic_headers_blocked_window_is_unavailable_even_if_not_chosen():
+def test_parse_anthropic_headers_blocked_window_is_unavailable():
     headers = _unified_headers(util_5h="0.99", status_5h="blocked", util_7d="0.05")
     cap = _parse_anthropic_rate_headers(headers, now=_NOW)
-    assert cap.window_name == "week"
+    assert cap.window_name == "session"
     assert cap.available is False
 
 
@@ -174,7 +174,7 @@ def test_check_anthropic_prefers_subscription_when_key_also_set():
             cap = check_anthropic()
     assert cap.available is True
     assert cap.auth_method == "oauth"
-    assert cap.remaining_pct == pytest.approx(98.0)
+    assert cap.remaining_pct == pytest.approx(93.0)
 
 
 def test_check_anthropic_falls_through_to_api_key_when_subscription_exhausted():
@@ -280,7 +280,7 @@ def test_check_anthropic_429_still_parses_rate_headers():
         with _patch_probe(error=error):
             cap = check_anthropic()
     assert cap.available is True
-    assert cap.remaining_pct == pytest.approx(98.0)
+    assert cap.remaining_pct == pytest.approx(93.0)
     assert cap.auth_method == "oauth"
 
 
@@ -293,8 +293,8 @@ def test_check_anthropic_no_token_no_key(tmp_path):
 
 
 def test_usage_pressure_formula():
-    assert _usage_pressure(91.0, 50.0) == pytest.approx(
-        0.91 / (0.5 * 0.9 + 0.05), abs=0.001
+    assert _usage_pressure(9.0, 50.0) == pytest.approx(
+        0.09 / (0.5 * 0.9 + 0.05), abs=0.001
     )
 
 
@@ -306,7 +306,7 @@ def test_usage_pressure_property_from_remaining():
         token_used_pct=9.0,
         window_used_pct=50.0,
     )
-    assert cap.usage_pressure == pytest.approx(_usage_pressure(91.0, 50.0), abs=0.001)
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(9.0, 50.0), abs=0.001)
 
 
 def test_usage_pressure_property_from_token_used_when_no_remaining():
@@ -316,7 +316,7 @@ def test_usage_pressure_property_from_token_used_when_no_remaining():
         token_used_pct=9.0,
         window_used_pct=50.0,
     )
-    assert cap.usage_pressure == pytest.approx(_usage_pressure(91.0, 50.0), abs=0.001)
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(9.0, 50.0), abs=0.001)
 
 
 CODEX_STATUS_OUTPUT = """\
@@ -371,7 +371,7 @@ def test_codex_status_reports_token_time_and_pressure():
     assert cap.token_used_pct == 1.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(_usage_pressure(99.0, 42.9), abs=0.01)
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(1.0, 42.9), abs=0.01)
 
 
 def test_parse_codex_status_low():
@@ -439,7 +439,7 @@ def test_parse_codex_usage_weekly_primary():
     assert cap.auth_method == "oauth"
     assert "prolite" in cap.detail
     assert "week 98%" in cap.detail
-    assert cap.usage_pressure == pytest.approx(_usage_pressure(98.0, 30.0), abs=0.01)
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(2.0, 30.0), abs=0.01)
 
 
 def test_parse_codex_usage_picks_tighter_window():
@@ -867,7 +867,7 @@ def test_grok_usage_reports_token_time_and_pressure():
     assert cap.token_used_pct == 53.0
     assert cap.window_name == "week"
     assert cap.window_used_pct == pytest.approx(42.9, abs=0.1)
-    assert cap.usage_pressure == pytest.approx(_usage_pressure(47.0, 42.9), abs=0.01)
+    assert cap.usage_pressure == pytest.approx(_usage_pressure(53.0, 42.9), abs=0.01)
 
 
 def test_parse_grok_usage_nearly_exhausted():
