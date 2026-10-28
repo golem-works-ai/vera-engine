@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from vera_engine.auto_select import (
     select_cheapest,
@@ -122,20 +123,11 @@ def _build_parser() -> argparse.ArgumentParser:
 # Engines whose CLI can run on a subscription login (strategy "none") as well
 # as on a provider API key (strategy "env-key"). Each probe already applies the
 # subscription-first rule from capacity.py.
-_SUBSCRIPTION_PROBES: dict[str, tuple[str, str]] = {
-    "claude-code": ("check_anthropic", "ANTHROPIC_API_KEY"),
-    "codex": ("check_openai", "OPENAI_API_KEY"),
-    "grok": ("check_xai", "XAI_API_KEY"),
+_SUBSCRIPTION_PROBES: dict[str, tuple[Callable[[], ProviderCapacity], str]] = {
+    "claude-code": (check_anthropic, "ANTHROPIC_API_KEY"),
+    "codex": (check_openai, "OPENAI_API_KEY"),
+    "grok": (check_xai, "XAI_API_KEY"),
 }
-
-
-def _probe(name: str) -> ProviderCapacity:
-    probes = {
-        "check_anthropic": check_anthropic,
-        "check_openai": check_openai,
-        "check_xai": check_xai,
-    }
-    return probes[name]()
 
 
 def _resolve_strategy(engine: str) -> str:
@@ -145,19 +137,26 @@ def _resolve_strategy(engine: str) -> str:
     the fallback. With neither, fail fast before anything spawns.
     Engines without a subscription concept (opencode) use env-key unprobed.
     """
-    entry = _SUBSCRIPTION_PROBES.get(engine)
-    if entry is None:
+    try:
+        probe, key_name = _SUBSCRIPTION_PROBES[engine]
+    except KeyError:
         return "env-key"
-    probe_name, key_name = entry
-    cap = _probe(probe_name)
-    if cap.auth_method == "oauth":
+    cap = probe()
+    if cap.available and cap.auth_method == "oauth":
+        # Live subscription login — prefer it even when the API key is set.
         return "none"
-    if cap.available:
+    if cap.available or (cap.auth_method == "oauth" and os.environ.get(key_name)):
+        # A probe-validated key, or an exhausted subscription with the API
+        # key as fallback. An exhausted oauth login with no key exits below.
         return "env-key"
+    detail = cap.detail or "not on subscription"
+    if os.environ.get(key_name):
+        key_clause = f" ({key_name} is set)"
+    else:
+        key_clause = f" and {key_name} is not set"
     print(
         f"error: engine {engine!r} has no usable credentials: no subscription "
-        f"login found ({cap.detail or 'not on subscription'}) and {key_name} "
-        "is not set",
+        f"login found ({detail}){key_clause}",
         file=sys.stderr,
     )
     raise SystemExit(1)

@@ -679,11 +679,17 @@ def test_main_resume_failure_surfaces_error(tmp_path, monkeypatch, capsys):
 # --- Per-engine strategy resolution when --strategy is omitted (issue #36) ---
 
 _ENGINE_PROBES = [
-    ("claude-code", "check_anthropic", "anthropic", "ANTHROPIC_API_KEY"),
-    ("codex", "check_openai", "openai", "OPENAI_API_KEY"),
-    ("grok", "check_xai", "xai", "XAI_API_KEY"),
+    ("claude-code", "anthropic", "ANTHROPIC_API_KEY"),
+    ("codex", "openai", "OPENAI_API_KEY"),
+    ("grok", "xai", "XAI_API_KEY"),
 ]
 _ALL_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY")
+
+
+def _patch_probe(monkeypatch, engine, provider, key, probe):
+    from vera_engine import cli
+
+    monkeypatch.setitem(cli._SUBSCRIPTION_PROBES, engine, (probe, key))
 
 
 def _capture_run(argv):
@@ -714,13 +720,13 @@ def _oauth(provider):
     )
 
 
-@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
 def test_main_run_default_strategy_uses_live_subscription(
-    tmp_path, monkeypatch, engine, probe, provider, key
+    tmp_path, monkeypatch, engine, provider, key
 ):
     for k in _ALL_KEYS:
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr(f"vera_engine.cli.{probe}", lambda: _oauth(provider))
+    _patch_probe(monkeypatch, engine, provider, key, lambda: _oauth(provider))
 
     rc, captured = _capture_run(
         ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
@@ -732,12 +738,12 @@ def test_main_run_default_strategy_uses_live_subscription(
     assert inv.home_strategy == "real"
 
 
-@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
 def test_main_run_default_strategy_prefers_subscription_over_set_key(
-    tmp_path, monkeypatch, engine, probe, provider, key
+    tmp_path, monkeypatch, engine, provider, key
 ):
     monkeypatch.setenv(key, "sk-test")
-    monkeypatch.setattr(f"vera_engine.cli.{probe}", lambda: _oauth(provider))
+    _patch_probe(monkeypatch, engine, provider, key, lambda: _oauth(provider))
 
     rc, captured = _capture_run(
         ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
@@ -747,9 +753,9 @@ def test_main_run_default_strategy_prefers_subscription_over_set_key(
     assert key not in captured["invocation"].env
 
 
-@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
 def test_main_run_default_strategy_falls_back_to_api_key(
-    tmp_path, monkeypatch, engine, probe, provider, key
+    tmp_path, monkeypatch, engine, provider, key
 ):
     monkeypatch.setenv(key, "sk-test")
 
@@ -762,9 +768,9 @@ def test_main_run_default_strategy_falls_back_to_api_key(
     assert captured["bundle"].values[key] == "sk-test"
 
 
-@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
 def test_main_run_default_strategy_fails_fast_without_credentials(
-    tmp_path, monkeypatch, capsys, engine, probe, provider, key
+    tmp_path, monkeypatch, capsys, engine, provider, key
 ):
     for k in _ALL_KEYS:
         monkeypatch.delenv(k, raising=False)
@@ -790,7 +796,7 @@ def test_main_run_explicit_strategy_skips_probe(tmp_path, monkeypatch):
     def boom():
         raise AssertionError("probe must not run with an explicit --strategy")
 
-    monkeypatch.setattr("vera_engine.cli.check_anthropic", boom)
+    _patch_probe(monkeypatch, "claude-code", "anthropic", "ANTHROPIC_API_KEY", boom)
 
     rc, captured = _capture_run(
         [
@@ -818,8 +824,8 @@ def test_main_run_opencode_default_strategy_needs_no_probe(tmp_path, monkeypatch
     def boom():
         raise AssertionError("opencode has no subscription to probe")
 
-    for probe in ("check_anthropic", "check_openai", "check_xai"):
-        monkeypatch.setattr(f"vera_engine.cli.{probe}", boom)
+    for engine, provider, key in _ENGINE_PROBES:
+        _patch_probe(monkeypatch, engine, provider, key, boom)
 
     rc, captured = _capture_run(
         ["run", "--engine", "opencode", "--workspace", str(tmp_path), "--prompt", "hi"]
@@ -834,7 +840,7 @@ def test_main_run_opencode_default_strategy_needs_no_probe(tmp_path, monkeypatch
 def test_main_run_model_without_engine_resolves_subscription(tmp_path, monkeypatch):
     for k in _ALL_KEYS:
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr("vera_engine.cli.check_xai", lambda: _oauth("xai"))
+    _patch_probe(monkeypatch, "grok", "xai", "XAI_API_KEY", lambda: _oauth("xai"))
 
     rc, captured = _capture_run(
         ["run", "--model", "grok-4.7", "--workspace", str(tmp_path), "--prompt", "hi"]
@@ -848,7 +854,10 @@ def test_main_run_model_without_engine_resolves_subscription(tmp_path, monkeypat
 def test_main_run_engine_and_tier_resolves_subscription(tmp_path, monkeypatch, capsys):
     for k in _ALL_KEYS:
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr("vera_engine.cli.check_anthropic", lambda: _oauth("anthropic"))
+    _patch_probe(
+        monkeypatch, "claude-code", "anthropic", "ANTHROPIC_API_KEY",
+        lambda: _oauth("anthropic"),
+    )
 
     rc, captured = _capture_run(
         [
@@ -867,3 +876,131 @@ def test_main_run_engine_and_tier_resolves_subscription(tmp_path, monkeypatch, c
     assert rc == 0
     assert "ANTHROPIC_API_KEY" not in captured["invocation"].env
     assert "strategy=none" in capsys.readouterr().err
+
+
+def _dead_oauth(provider):
+    from vera_engine.capacity import ProviderCapacity
+
+    return ProviderCapacity(
+        provider,
+        available=False,
+        remaining_pct=1.0,
+        detail="limit reached",
+        auth_method="oauth",
+    )
+
+
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_exhausted_subscription_fails_fast(
+    tmp_path, monkeypatch, capsys, engine, provider, key
+):
+    for k in _ALL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    _patch_probe(monkeypatch, engine, provider, key, lambda: _dead_oauth(provider))
+
+    with (
+        patch("vera_engine.cli.render_local") as fake_render_local,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(
+            ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+        )
+
+    assert exc_info.value.code == 1
+    fake_render_local.assert_not_called()
+    err = capsys.readouterr().err
+    assert "no usable credentials" in err
+    assert f"{key} is not set" in err
+
+
+@pytest.mark.parametrize("engine,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_exhausted_subscription_falls_back_to_api_key(
+    tmp_path, monkeypatch, engine, provider, key
+):
+    monkeypatch.setenv(key, "sk-test")
+    _patch_probe(monkeypatch, engine, provider, key, lambda: _dead_oauth(provider))
+
+    rc, captured = _capture_run(
+        ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    assert captured["invocation"].env[key] == SecretRef(key)
+    assert captured["bundle"].values[key] == "sk-test"
+
+
+def test_main_run_unavailable_with_key_set_reports_key_set(
+    tmp_path, monkeypatch, capsys
+):
+    """The error must not claim the key is unset when it is set (e.g. the
+    grok probe is unavailable because the binary is missing, key present)."""
+    from vera_engine.capacity import ProviderCapacity
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    _patch_probe(
+        monkeypatch,
+        "claude-code",
+        "anthropic",
+        "ANTHROPIC_API_KEY",
+        lambda: ProviderCapacity(
+            "anthropic", available=False, detail="claude: command not found"
+        ),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "run",
+                "--engine",
+                "claude-code",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+            ]
+        )
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY is set" in err
+    assert "is not set" not in err
+
+
+def test_main_run_auto_select_explicit_strategy_not_overwritten(
+    tmp_path, monkeypatch
+):
+    """An explicit --strategy survives the auto-select path (issue #36)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    sel = Selection(
+        model=ModelSpec(
+            model_id="gpt-6-luna",
+            engine="codex",
+            provider="openai",
+            input_cost=1.0,
+            output_cost=1.0,
+            tier=Tier.clay,
+        ),
+        strategy="none",
+        effective_cost=1.0,
+    )
+    fake_select = MagicMock(return_value=sel)
+
+    with patch("vera_engine.cli.select_model", fake_select):
+        rc, captured = _capture_run(
+            [
+                "run",
+                "--workspace",
+                str(tmp_path),
+                "--prompt",
+                "hi",
+                "--strategy",
+                "env-key",
+            ]
+        )
+
+    assert rc == 0
+    fake_select.assert_called_once()
+    assert captured["invocation"].env["OPENAI_API_KEY"] == SecretRef(
+        "OPENAI_API_KEY"
+    )

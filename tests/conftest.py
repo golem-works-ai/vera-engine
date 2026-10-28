@@ -50,13 +50,17 @@ def _no_live_subscription_probes(monkeypatch):
 
     Without this, a developer's real subscription login would change which
     strategy the CLI tests resolve. Tests that need a live subscription patch
-    these names themselves.
+    the probe entries themselves.
     """
-    for name, provider, key in (
-        ("check_anthropic", "anthropic", "ANTHROPIC_API_KEY"),
-        ("check_openai", "openai", "OPENAI_API_KEY"),
-        ("check_xai", "xai", "XAI_API_KEY"),
+    from vera_engine import cli
+
+    for engine, provider, key in (
+        ("claude-code", "anthropic", "ANTHROPIC_API_KEY"),
+        ("codex", "openai", "OPENAI_API_KEY"),
+        ("grok", "xai", "XAI_API_KEY"),
     ):
-        monkeypatch.setattr(
-            f"vera_engine.cli.{name}", _no_subscription_probe(provider, key)
+        monkeypatch.setitem(
+            cli._SUBSCRIPTION_PROBES,
+            engine,
+            (_no_subscription_probe(provider, key), key),
         )
