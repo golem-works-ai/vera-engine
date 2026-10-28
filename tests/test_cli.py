@@ -45,7 +45,7 @@ def test_parser_run_defaults():
     assert args.effort == "high"
     assert args.workspace == Path(".")
     assert args.timeout == 2400
-    assert args.strategy == "env-key"
+    assert args.strategy is None
 
 
 def test_parser_run_tier():
@@ -674,3 +674,196 @@ def test_main_resume_failure_surfaces_error(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "resume" in err.lower()
     assert "dead" in err
+
+
+# --- Per-engine strategy resolution when --strategy is omitted (issue #36) ---
+
+_ENGINE_PROBES = [
+    ("claude-code", "check_anthropic", "anthropic", "ANTHROPIC_API_KEY"),
+    ("codex", "check_openai", "openai", "OPENAI_API_KEY"),
+    ("grok", "check_xai", "xai", "XAI_API_KEY"),
+]
+_ALL_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY")
+
+
+def _capture_run(argv):
+    captured = {}
+
+    def fake_render_local(invocation, bundle, builder=None):
+        captured["invocation"] = invocation
+        captured["bundle"] = bundle
+        return RunResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            engine=invocation.engine,
+            argv=invocation.argv,
+        )
+
+    with patch("vera_engine.cli.render_local", fake_render_local):
+        rc = main(argv)
+    return rc, captured
+
+
+def _oauth(provider):
+    from vera_engine.capacity import ProviderCapacity
+
+    return ProviderCapacity(
+        provider, available=True, detail="subscription", auth_method="oauth"
+    )
+
+
+@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_uses_live_subscription(
+    tmp_path, monkeypatch, engine, probe, provider, key
+):
+    for k in _ALL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(f"vera_engine.cli.{probe}", lambda: _oauth(provider))
+
+    rc, captured = _capture_run(
+        ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    inv = captured["invocation"]
+    assert key not in inv.env
+    assert inv.home_strategy == "real"
+
+
+@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_prefers_subscription_over_set_key(
+    tmp_path, monkeypatch, engine, probe, provider, key
+):
+    monkeypatch.setenv(key, "sk-test")
+    monkeypatch.setattr(f"vera_engine.cli.{probe}", lambda: _oauth(provider))
+
+    rc, captured = _capture_run(
+        ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    assert key not in captured["invocation"].env
+
+
+@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_falls_back_to_api_key(
+    tmp_path, monkeypatch, engine, probe, provider, key
+):
+    monkeypatch.setenv(key, "sk-test")
+
+    rc, captured = _capture_run(
+        ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    assert captured["invocation"].env[key] == SecretRef(key)
+    assert captured["bundle"].values[key] == "sk-test"
+
+
+@pytest.mark.parametrize("engine,probe,provider,key", _ENGINE_PROBES)
+def test_main_run_default_strategy_fails_fast_without_credentials(
+    tmp_path, monkeypatch, capsys, engine, probe, provider, key
+):
+    for k in _ALL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+
+    with (
+        patch("vera_engine.cli.render_local") as fake_render_local,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(
+            ["run", "--engine", engine, "--workspace", str(tmp_path), "--prompt", "hi"]
+        )
+
+    assert exc_info.value.code == 1
+    fake_render_local.assert_not_called()
+    err = capsys.readouterr().err
+    assert "no subscription login" in err
+    assert key in err
+
+
+def test_main_run_explicit_strategy_skips_probe(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    def boom():
+        raise AssertionError("probe must not run with an explicit --strategy")
+
+    monkeypatch.setattr("vera_engine.cli.check_anthropic", boom)
+
+    rc, captured = _capture_run(
+        [
+            "run",
+            "--engine",
+            "claude-code",
+            "--workspace",
+            str(tmp_path),
+            "--prompt",
+            "hi",
+            "--strategy",
+            "env-key",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["invocation"].env["ANTHROPIC_API_KEY"] == SecretRef(
+        "ANTHROPIC_API_KEY"
+    )
+
+
+def test_main_run_opencode_default_strategy_needs_no_probe(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+    def boom():
+        raise AssertionError("opencode has no subscription to probe")
+
+    for probe in ("check_anthropic", "check_openai", "check_xai"):
+        monkeypatch.setattr(f"vera_engine.cli.{probe}", boom)
+
+    rc, captured = _capture_run(
+        ["run", "--engine", "opencode", "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    assert captured["invocation"].env["OPENROUTER_API_KEY"] == SecretRef(
+        "OPENROUTER_API_KEY"
+    )
+
+
+def test_main_run_model_without_engine_resolves_subscription(tmp_path, monkeypatch):
+    for k in _ALL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr("vera_engine.cli.check_xai", lambda: _oauth("xai"))
+
+    rc, captured = _capture_run(
+        ["run", "--model", "grok-4.7", "--workspace", str(tmp_path), "--prompt", "hi"]
+    )
+
+    assert rc == 0
+    assert captured["invocation"].engine == "grok"
+    assert "XAI_API_KEY" not in captured["invocation"].env
+
+
+def test_main_run_engine_and_tier_resolves_subscription(tmp_path, monkeypatch, capsys):
+    for k in _ALL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr("vera_engine.cli.check_anthropic", lambda: _oauth("anthropic"))
+
+    rc, captured = _capture_run(
+        [
+            "run",
+            "--engine",
+            "claude-code",
+            "--tier",
+            "clay",
+            "--workspace",
+            str(tmp_path),
+            "--prompt",
+            "hi",
+        ]
+    )
+
+    assert rc == 0
+    assert "ANTHROPIC_API_KEY" not in captured["invocation"].env
+    assert "strategy=none" in capsys.readouterr().err
