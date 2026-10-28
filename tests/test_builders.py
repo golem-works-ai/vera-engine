@@ -91,19 +91,14 @@ def test_claude_code_env_key_strategy(tmp_path):
     )
     inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
 
-    assert len(inv.files) == 1
-    assert re.fullmatch(
-        r"\.vera-engine-claude-prompt-[0-9a-f]{32}\.md", inv.files[0].relative_path
-    )
-    expected_prompt_path = tmp_path / inv.files[0].relative_path
-    assert inv.argv == ("claude", "-p", str(expected_prompt_path), "--verbose")
+    assert inv.files == ()
+    assert inv.argv == ("claude", "-p", "do the thing", "--verbose")
     assert inv.env["ANTHROPIC_API_KEY"] == SecretRef("ANTHROPIC_API_KEY")
     assert "ANTHROPIC_BASE_URL" not in inv.env
     assert inv.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
     assert inv.workdir == tmp_path
     assert inv.home_strategy == "hermetic"
-    assert inv.prompt_path == expected_prompt_path
-    assert inv.files[0].content == "do the thing"
+    assert inv.prompt_path is None
 
 
 def test_claude_code_proxy_strategy(tmp_path):
@@ -719,9 +714,7 @@ def test_claude_code_parse_usage_report_no_warning_when_fields_present(caplog):
     assert caplog.records == []
 
 
-@pytest.mark.parametrize(
-    "builder,engine", [(GrokBuilder(), "grok"), (ClaudeCodeBuilder(), "claude-code")]
-)
+@pytest.mark.parametrize("builder,engine", [(GrokBuilder(), "grok")])
 def test_concurrent_runs_in_one_workspace_get_distinct_prompt_files(
     builder, engine, tmp_path
 ):
@@ -771,3 +764,14 @@ def test_opencode_write_access_adds_auto(tmp_path):
     argv = OpenCodeBuilder().build_invocation(req, "env-key").argv
     assert "--auto" in argv
     assert argv[-1] == "x"
+
+
+def test_claude_code_passes_prompt_content_not_a_path(tmp_path):
+    req = AgentRunRequest(
+        engine="claude-code", prompt="line one\nline two", workspace=tmp_path
+    )
+    inv = ClaudeCodeBuilder().build_invocation(req, "none")
+
+    assert inv.argv[:3] == ("claude", "-p", "line one\nline two")
+    assert str(tmp_path) not in " ".join(inv.argv)
+    assert inv.files == ()
