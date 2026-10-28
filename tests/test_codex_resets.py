@@ -46,16 +46,54 @@ def usage(*, remaining=63, credits=None):
 
 
 def test_expiring_reset_adds_one_full_allowance_and_reduces_pressure():
-    ordinary = capacity._parse_codex_usage(usage(credits=[]), now=NOW)
     cap = capacity._parse_codex_usage(
         usage(credits=[credit(), credit(id="reset-2")]), now=NOW
     )
     assert cap.remaining_pct == 163
     assert cap.weekly_remaining_pct == 63
-    assert cap.token_used_pct == 37
-    assert cap.usage_pressure == pytest.approx(ordinary.usage_pressure / 2)
+    assert cap.token_used_pct == 0
+    assert cap.usage_pressure == 0
     assert cap.reset_credit_id == "reset-1"
     assert cap.available
+
+
+@pytest.mark.parametrize("remaining", [0, 4, 51, 100])
+@pytest.mark.parametrize("has_reset", [False, True])
+def test_codex_effective_usage_matches_remaining_quota(remaining, has_reset):
+    cap = capacity._parse_codex_usage(
+        usage(remaining=remaining, credits=[credit()] if has_reset else []), now=NOW
+    )
+    effective_used = max(0, 100 - cap.remaining_pct)
+    assert cap.token_used_pct == effective_used
+    assert cap.usage_pressure == pytest.approx(
+        capacity._usage_pressure(effective_used, cap.window_used_pct)
+    )
+    assert cap.weekly_remaining_pct == remaining
+
+
+def test_cache_with_previous_usage_calculation_is_discarded(tmp_path, monkeypatch):
+    cache = tmp_path / "capacity.json"
+    monkeypatch.setattr(capacity, "_CAPACITY_CACHE_PATH", cache)
+    cache.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "expires_at": NOW.timestamp() + 1800,
+                "capacities": {
+                    "openai": {
+                        "provider": "openai",
+                        "available": True,
+                        "remaining_pct": 151,
+                        "token_used_pct": 49,
+                        "window_used_pct": 9,
+                        "reset_credit_id": "reset-1",
+                    }
+                },
+            }
+        )
+    )
+    with patch.object(capacity.time, "time", return_value=NOW.timestamp()):
+        assert capacity._load_cached_capacities() is None
 
 
 @pytest.mark.parametrize(
@@ -181,7 +219,9 @@ def test_unrecognized_consume_response_is_tolerated(tmp_path, monkeypatch, body)
     monkeypatch.setattr(capacity, "_CAPACITY_CACHE_PATH", cache)
     cap = capacity._parse_codex_usage(usage(remaining=1), now=NOW)
     with (
-        patch.object(capacity, "_codex_chatgpt_auth", return_value=("token", "account")),
+        patch.object(
+            capacity, "_codex_chatgpt_auth", return_value=("token", "account")
+        ),
         patch.object(capacity, "_check_codex_usage", return_value=cap),
         patch.object(capacity, "_urlopen", return_value=Response(body)),
         patch.object(capacity.logger, "warning") as warn,
