@@ -1,4 +1,4 @@
-# vera-template-version: 2026.10.21.1
+# vera-template-version: 2026.10.24.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -431,6 +431,7 @@ jobs:
           VERA_CALLBACK_TOKEN: ${{ inputs.callback_token }}
           VERA_API_URL: ${{ inputs.vera_api_url }}
           VERA_GRACEFUL_EXIT: ${{ steps.fetch.outputs.graceful_exit }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
         run: |
           # Issue #3847: skip success callback on graceful exit — the
           # winning runner owns the job's terminal state.
@@ -543,12 +544,19 @@ jobs:
           # metered proxy, so this is the only source of their real cost — same
           # "absence is a valid state" contract as manifest/pool_capacity above.
           vera_json_or_null /tmp/vera_usage_report.json /tmp/vera_cb_usage_report.json
+          # Issue #8848: structured PR identity. HEAD_BRANCH mirrors the
+          # #7469 rescue step's own-branch filter (line ~395) so a job that
+          # finished on main/HEAD reports no branch. pr_number is read from
+          # the agent's outcome file inside the jq call below.
+          HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+          case "$HEAD_BRANCH" in ""|HEAD|"$DEFAULT_BRANCH") HEAD_BRANCH="" ;; esac
           jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
             --arg status "$STATUS" \
             --arg error "$ERROR_MSG" \
             --arg rescued_branch "${RESCUED:-}" \
+            --arg head_branch "$HEAD_BRANCH" \
             --slurpfile outcome /tmp/vera_cb_outcome.json \
             --slurpfile manifest /tmp/vera_cb_manifest.json \
             --slurpfile pool_capacity /tmp/vera_cb_pool_capacity.json \
@@ -556,6 +564,8 @@ jobs:
             '{job_id:$job_id, token:$token, status:$status}
              + (if $error != "" then {error:$error} else {} end)
              + (if $rescued_branch != "" then {rescued_branch:$rescued_branch} else {} end)
+             + (if $head_branch != "" then {head_branch:$head_branch} else {} end)
+             + (if ($outcome[0].pr_number? | type) == "number" then {pr_number:$outcome[0].pr_number} else {} end)
              + (if $manifest[0] != null then {manifest:$manifest[0]} else {} end)
              + (if $pool_capacity[0] != null then {pool_capacity:$pool_capacity[0]} else {} end)
              + (if $usage_report[0] != null then {usage_report:$usage_report[0]} else {} end)
@@ -591,6 +601,7 @@ jobs:
           VERA_API_URL: ${{ inputs.vera_api_url }}
           VERA_GRACEFUL_EXIT: ${{ steps.fetch.outputs.graceful_exit }}
           VERA_STEP_FAILURE_REASON: ${{ steps.fetch.outputs.step_failure_reason || steps.expose_runner_secrets.outputs.step_failure_reason }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
         run: |
           # Issue #3847: never report failed for the loser of a credentials
           # race — the winning runner is actively working the job. The 410
@@ -669,15 +680,23 @@ jobs:
           # Subscription-engine usage (issue #7037). See the mirrored comment
           # in the success-callback step above.
           vera_json_or_null /tmp/vera_usage_report.json /tmp/vera_cb_usage_report.json
+          # Issue #8848: structured PR identity, mirrored from the success
+          # callback above — a failed run may still have pushed a branch (or
+          # even opened a PR) that the orphan-PR attach logic can use.
+          HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+          case "$HEAD_BRANCH" in ""|HEAD|"$DEFAULT_BRANCH") HEAD_BRANCH="" ;; esac
           jq -n \
             --arg job_id "$VERA_JOB_ID" \
             --arg token "$VERA_CALLBACK_TOKEN" \
             --arg error "$ERROR_MSG" \
+            --arg head_branch "$HEAD_BRANCH" \
             --slurpfile outcome /tmp/vera_cb_outcome.json \
             --slurpfile manifest /tmp/vera_cb_manifest.json \
             --slurpfile pool_capacity /tmp/vera_cb_pool_capacity.json \
             --slurpfile usage_report /tmp/vera_cb_usage_report.json \
             '{job_id:$job_id, token:$token, status:"failed", error:$error}
+             + (if $head_branch != "" then {head_branch:$head_branch} else {} end)
+             + (if ($outcome[0].pr_number? | type) == "number" then {pr_number:$outcome[0].pr_number} else {} end)
              + (if $manifest[0] != null then {manifest:$manifest[0]} else {} end)
              + (if $pool_capacity[0] != null then {pool_capacity:$pool_capacity[0]} else {} end)
              + (if $usage_report[0] != null then {usage_report:$usage_report[0]} else {} end)
