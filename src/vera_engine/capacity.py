@@ -58,12 +58,9 @@ class ProviderCapacity:
         if self.token_used_pct is not None:
             used_pct = self.token_used_pct
         elif self.remaining_pct is not None:
-            used_pct = 100.0 - self.remaining_pct
+            used_pct = max(0.0, 100.0 - self.remaining_pct)
         else:
             return None
-        # An expiring full reset adds another complete allowance.
-        if self.reset_credit_id is not None:
-            used_pct /= 2
         return _usage_pressure(used_pct, self.window_used_pct)
 
 
@@ -692,7 +689,7 @@ def _parse_codex_usage(
         remaining_pct=chosen.remaining_pct + bonus,
         detail=f"codex {plan_name}: {', '.join(parts)} remaining",
         auth_method="oauth",
-        token_used_pct=chosen.token_used_pct,
+        token_used_pct=max(0.0, 100.0 - chosen.remaining_pct - bonus),
         window_used_pct=chosen.window_used_pct,
         window_name=chosen.window_name,
         weekly_remaining_pct=weekly.remaining_pct if weekly else None,
@@ -1110,7 +1107,7 @@ def _load_cached_capacities() -> dict[str, ProviderCapacity] | None:
     """Load a fresh cross-process capacity snapshot, if one exists."""
     try:
         payload = json.loads(_CAPACITY_CACHE_PATH.read_text(encoding="utf-8"))
-        if payload.get("version") != 2:
+        if payload.get("version") != 3:
             return None
         if time.time() >= payload["expires_at"]:
             return None
@@ -1128,7 +1125,7 @@ def _save_cached_capacities(capacities: dict[str, ProviderCapacity]) -> None:
     try:
         _CAPACITY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version": 2,
+            "version": 3,
             "expires_at": min(
                 [time.time() + _CAPACITY_CACHE_TTL_SECONDS]
                 + [

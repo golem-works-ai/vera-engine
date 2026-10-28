@@ -91,8 +91,9 @@ the providers immediately.
 OpenAI remaining quota comes from the ChatGPT login.
 `OPENAI_API_KEY` is the fallback when that login is missing or below 5%.
 An available full reset expiring in less than 48 hours adds 100 percentage
-points to reported Codex remaining quota (one reset maximum). Pressure uses
-the resulting doubled allowance. Before a local subscription Codex run starts,
+points to reported Codex remaining quota (one reset maximum). Displayed token
+usage is `max(0, 100 - remaining)`; pressure is zero at 100% or more remaining.
+Before a local subscription Codex run starts,
 live weekly quota below 5% triggers redemption of that expiring reset and
 deletes the capacity cache. Capacity inspection itself never redeems resets.
 
