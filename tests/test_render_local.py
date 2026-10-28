@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from vera_engine.builders.claude_code import ClaudeCodeBuilder
+from vera_engine.builders.grok import GrokBuilder
 from vera_engine.credentials import CredentialBundle, CredentialGuardError, SecretRef
 from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
 from vera_engine.render.local import (
@@ -291,13 +291,13 @@ def test_render_local_materializes_and_cleans_up_files(tmp_path):
 
 
 def test_render_local_cleanup_leaves_sibling_run_files(tmp_path):
-    builder = ClaudeCodeBuilder()
+    builder = GrokBuilder()
     a = builder.build_invocation(
-        AgentRunRequest(engine="claude-code", prompt="task A", workspace=tmp_path),
+        AgentRunRequest(engine="grok", prompt="task A", workspace=tmp_path),
         "none",
     )
     b = builder.build_invocation(
-        AgentRunRequest(engine="claude-code", prompt="task B", workspace=tmp_path),
+        AgentRunRequest(engine="grok", prompt="task B", workspace=tmp_path),
         "none",
     )
     # B's file is materialized up front, as if B's run is already in flight.

@@ -7,10 +7,9 @@ import json
 from vera_engine.builders.base import (
     EngineBuilder,
     parse_usage_report_json,
-    per_run_filename,
 )
 from vera_engine.credentials import SecretRef
-from vera_engine.invocation import EngineInvocation, EngineUsageReport, MaterializedFile
+from vera_engine.invocation import EngineInvocation, EngineUsageReport
 from vera_engine.request import AgentRunRequest
 
 _EFFORT_MAP = {
@@ -18,9 +17,6 @@ _EFFORT_MAP = {
     "medium": "medium",
     "high": "high",
 }
-
-
-PROMPT_FILENAME_PREFIX = ".vera-engine-claude-prompt"
 
 
 class ClaudeCodeBuilder(EngineBuilder):
@@ -40,15 +36,9 @@ class ClaudeCodeBuilder(EngineBuilder):
     ) -> EngineInvocation:
         self.validate_strategy(strategy)
 
-        prompt_filename = per_run_filename(PROMPT_FILENAME_PREFIX, ".md")
-        prompt_file = MaterializedFile(
-            relative_path=prompt_filename,
-            content=request.prompt,
-            cleanup=True,
-        )
-        prompt_path = request.workspace / prompt_filename
-
-        argv: list[str] = ["claude", "-p", str(prompt_path), "--verbose"]
+        # `claude -p` is a boolean flag; the positional argument is the prompt
+        # text itself, not a path. Pass the content so every model answers it.
+        argv: list[str] = ["claude", "-p", request.prompt, "--verbose"]
 
         if request.structured_output:
             argv.extend(["--output-format", "json"])
@@ -88,8 +78,6 @@ class ClaudeCodeBuilder(EngineBuilder):
             workdir=request.workspace,
             home_strategy=home,
             timeout_seconds=request.timeout_seconds,
-            files=(prompt_file,),
-            prompt_path=prompt_path,
             resume=request.resume,
         )
 
