@@ -152,6 +152,10 @@ def render_local(
 
     try:
         full_env = _build_base_env(invocation, resolved_env, hermetic_home)
+        if invocation.engine == "codex" and "OPENAI_API_KEY" not in invocation.env:
+            from vera_engine.capacity import redeem_codex_reset_before_start
+
+            redeem_codex_reset_before_start(full_env)
 
         # Materialize config files.
         cleanup_paths = _materialize_files(

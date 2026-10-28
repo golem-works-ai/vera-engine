@@ -22,6 +22,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,6 +46,9 @@ class ProviderCapacity:
     token_used_pct: float | None = None
     window_used_pct: float | None = None
     window_name: str | None = None
+    weekly_remaining_pct: float | None = None
+    reset_credit_id: str | None = None
+    reset_credit_expires_at: float | None = None
 
     @property
     def usage_pressure(self) -> float | None:
@@ -57,6 +61,9 @@ class ProviderCapacity:
             used_pct = 100.0 - self.remaining_pct
         else:
             return None
+        # An expiring full reset adds another complete allowance.
+        if self.reset_credit_id is not None:
+            used_pct /= 2
         return _usage_pressure(used_pct, self.window_used_pct)
 
 
@@ -153,6 +160,9 @@ def check_anthropic() -> ProviderCapacity:
 # setup-tokens. This probe must hit Anthropic directly.
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+_CODEX_RESET_CREDITS_URL = (
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+)
 _CODEX_USAGE_TIMEOUT_SECONDS = 15
 _HAIKU_PROBE_MODEL = "claude-haiku-4-5-20251001"
 _ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
@@ -406,10 +416,12 @@ def _codex_home() -> Path:
     return Path.home() / ".codex"
 
 
-def _codex_chatgpt_auth() -> tuple[str, str] | None:
+def _codex_chatgpt_auth(home: Path | None = None) -> tuple[str, str] | None:
     """Return the ChatGPT access token and account id, when both are stored."""
     try:
-        data = json.loads((_codex_home() / "auth.json").read_text(encoding="utf-8"))
+        data = json.loads(
+            ((home or _codex_home()) / "auth.json").read_text(encoding="utf-8")
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
@@ -439,9 +451,11 @@ def _check_codex_subscription() -> ProviderCapacity:
     return ProviderCapacity("openai", available=False, detail="not on subscription")
 
 
-def _check_codex_usage() -> ProviderCapacity | None:
+def _check_codex_usage(
+    *, auth: tuple[str, str] | None = None
+) -> ProviderCapacity | None:
     """Read remaining Codex quota from ``GET /backend-api/wham/usage``."""
-    auth = _codex_chatgpt_auth()
+    auth = auth or _codex_chatgpt_auth()
     if auth is None:
         return None
     token, account_id = auth
@@ -472,7 +486,93 @@ def _check_codex_usage() -> ProviderCapacity | None:
         return None
     if not isinstance(payload, dict):
         return None
+    summary = payload.get("rate_limit_reset_credits")
+    if (
+        isinstance(summary, dict)
+        and (_as_float(summary.get("available_count")) or 0) > 0
+    ):
+        try:
+            request = urllib.request.Request(
+                _CODEX_RESET_CREDITS_URL, headers=dict(req.header_items())
+            )
+            with _urlopen(request, timeout=_CODEX_USAGE_TIMEOUT_SECONDS) as resp:
+                payload["rate_limit_reset_credits"] = json.loads(resp.read())
+        except Exception as exc:  # noqa: BLE001 - keep the ordinary usage reading
+            logger.warning("codex reset-credit check failed: %s", exc)
     return _parse_codex_usage(payload)
+
+
+def _expiring_codex_reset(payload: dict, now: datetime) -> tuple[str, float] | None:
+    summary = payload.get("rate_limit_reset_credits")
+    credits = summary.get("credits") if isinstance(summary, dict) else None
+    eligible = []
+    for credit in credits if isinstance(credits, list) else []:
+        if not isinstance(credit, dict) or credit.get("status") != "available":
+            continue
+        if (
+            credit.get("reset_type") != "codex_rate_limits"
+            or credit.get("is_supported_by_plan") is not True
+        ):
+            continue
+        credit_id = credit.get("id")
+        expiry = credit.get("expires_at")
+        try:
+            expires_at = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+            remaining = (expires_at - now).total_seconds()
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if isinstance(credit_id, str) and credit_id and 0 < remaining < 48 * 3600:
+            eligible.append((credit_id, expires_at.timestamp()))
+    return min(eligible, key=lambda item: item[1]) if eligible else None
+
+
+def redeem_codex_reset_before_start(env: dict[str, str]) -> None:
+    """Redeem one expiring full reset below 5% weekly quota, using live usage."""
+    home = Path(
+        env.get("CODEX_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".codex")
+    )
+    auth = _codex_chatgpt_auth(home)
+    if auth is None:
+        return
+    # Serialize fresh-check + redemption across local session starts.
+    import fcntl
+
+    lock_path = home / "vera-engine-reset.lock"
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        cap = _check_codex_usage(auth=auth)
+        if (
+            cap is None
+            or cap.reset_credit_id is None
+            or cap.weekly_remaining_pct is None
+            or cap.weekly_remaining_pct >= 5
+        ):
+            return
+        req = urllib.request.Request(
+            _CODEX_RESET_CREDITS_URL + "/consume",
+            data=json.dumps(
+                {
+                    "credit_id": cap.reset_credit_id,
+                    "redeem_request_id": str(uuid.uuid4()),
+                }
+            ).encode(),
+            headers={
+                "Authorization": f"Bearer {auth[0]}",
+                "ChatGPT-Account-Id": auth[1],
+                "Content-Type": "application/json",
+                "User-Agent": "codex-cli",
+            },
+        )
+        try:
+            with _urlopen(req, timeout=_CODEX_USAGE_TIMEOUT_SECONDS) as resp:
+                result = json.loads(resp.read())
+            if result.get("outcome") not in ("reset", "already_redeemed"):
+                raise RuntimeError(
+                    f"Codex reset was not redeemed: {result.get('outcome')}"
+                )
+        finally:
+            # A timeout can also mean the backend redeemed it; discard stale quota.
+            _CAPACITY_CACHE_PATH.unlink(missing_ok=True)
 
 
 def _as_float(value: object) -> float | None:
@@ -562,18 +662,32 @@ def _parse_codex_usage(
         )
 
     chosen = max(readings, key=lambda reading: reading.pressure)
-    parts = [f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings]
+    reset = _expiring_codex_reset(payload, current)
+    weekly = next(
+        (reading for reading in readings if reading.window_name == "week"), None
+    )
+    # A full reset restores both windows. Count one imminent reset, never stack them.
+    bonus = 100.0 if reset is not None and weekly is not None else 0.0
+    parts = [
+        f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
+    ]
+    if bonus:
+        parts.append("+100% expiring full reset")
     allowed = rate.get("allowed", True)
     limit_reached = rate.get("limit_reached") is True
     return ProviderCapacity(
         "openai",
-        available=chosen.remaining_pct > 2 and allowed is not False and not limit_reached,
-        remaining_pct=chosen.remaining_pct,
+        available=bool(bonus)
+        or (chosen.remaining_pct > 2 and allowed is not False and not limit_reached),
+        remaining_pct=chosen.remaining_pct + bonus,
         detail=f"codex {plan_name}: {', '.join(parts)} remaining",
         auth_method="oauth",
         token_used_pct=chosen.token_used_pct,
         window_used_pct=chosen.window_used_pct,
         window_name=chosen.window_name,
+        weekly_remaining_pct=weekly.remaining_pct if weekly else None,
+        reset_credit_id=reset[0] if bonus else None,
+        reset_credit_expires_at=reset[1] if bonus else None,
     )
 
 
@@ -986,6 +1100,8 @@ def _load_cached_capacities() -> dict[str, ProviderCapacity] | None:
     """Load a fresh cross-process capacity snapshot, if one exists."""
     try:
         payload = json.loads(_CAPACITY_CACHE_PATH.read_text(encoding="utf-8"))
+        if payload.get("version") != 2:
+            return None
         if time.time() >= payload["expires_at"]:
             return None
         capacities = {
@@ -1002,7 +1118,15 @@ def _save_cached_capacities(capacities: dict[str, ProviderCapacity]) -> None:
     try:
         _CAPACITY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "expires_at": time.time() + _CAPACITY_CACHE_TTL_SECONDS,
+            "version": 2,
+            "expires_at": min(
+                [time.time() + _CAPACITY_CACHE_TTL_SECONDS]
+                + [
+                    cap.reset_credit_expires_at
+                    for cap in capacities.values()
+                    if cap.reset_credit_expires_at is not None
+                ]
+            ),
             "capacities": {
                 provider: {
                     "provider": cap.provider,
@@ -1014,6 +1138,9 @@ def _save_cached_capacities(capacities: dict[str, ProviderCapacity]) -> None:
                     "token_used_pct": cap.token_used_pct,
                     "window_used_pct": cap.window_used_pct,
                     "window_name": cap.window_name,
+                    "weekly_remaining_pct": cap.weekly_remaining_pct,
+                    "reset_credit_id": cap.reset_credit_id,
+                    "reset_credit_expires_at": cap.reset_credit_expires_at,
                 }
                 for provider, cap in capacities.items()
             },
