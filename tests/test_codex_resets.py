@@ -1,8 +1,10 @@
 """Expiring Codex reset allowance and startup redemption."""
 
 import json
+import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -169,6 +171,36 @@ def test_reset_failure_invalidates_cache_and_stops_startup(tmp_path, monkeypatch
     assert not cache.exists()
 
 
+@pytest.mark.parametrize(
+    "body", [{"outcome": "error"}, {"no_outcome_key": 1}, ["not", "a", "dict"]]
+)
+def test_unrecognized_consume_response_is_tolerated(tmp_path, monkeypatch, body):
+    """Unknown 2xx consume bodies log a warning instead of crashing startup."""
+    cache = tmp_path / "capacity.json"
+    cache.write_text("stale")
+    monkeypatch.setattr(capacity, "_CAPACITY_CACHE_PATH", cache)
+    cap = capacity._parse_codex_usage(usage(remaining=1), now=NOW)
+    with (
+        patch.object(capacity, "_codex_chatgpt_auth", return_value=("token", "account")),
+        patch.object(capacity, "_check_codex_usage", return_value=cap),
+        patch.object(capacity, "_urlopen", return_value=Response(body)),
+        patch.object(capacity.logger, "warning") as warn,
+    ):
+        # Must not raise: unrecognized response shapes are tolerated.
+        capacity.redeem_codex_reset_before_start({"CODEX_HOME": str(tmp_path)})
+    assert not cache.exists()
+    assert warn.called
+
+
+def test_codex_home_honors_env_mapping():
+    assert capacity._codex_home({"CODEX_HOME": "/custom/codex"}) == Path(
+        "/custom/codex"
+    )
+    assert capacity._codex_home({"HOME": "/home/user"}) == Path("/home/user/.codex")
+    with patch.dict(capacity.os.environ, {"CODEX_HOME": "/env/codex"}, clear=True):
+        assert capacity._codex_home() == Path("/env/codex")
+
+
 def test_reset_metadata_survives_cache_roundtrip_and_bounds_expiry(
     tmp_path, monkeypatch
 ):
@@ -203,6 +235,28 @@ def test_local_startup_redeems_only_for_subscription_runs(tmp_path, api_key):
         result = render_local(invocation, CredentialBundle(values={}))
     assert result.returncode == 0
     assert redeem.called != api_key
+
+
+def test_local_startup_survives_redemption_failure(tmp_path):
+    """A failing redemption probe must not crash codex startup (render_local)."""
+    from vera_engine.credentials import CredentialBundle
+    from vera_engine.invocation import EngineInvocation
+    from vera_engine.render.local import render_local
+
+    def boom(env):
+        raise TimeoutError("probe timed out")
+
+    invocation = EngineInvocation(
+        engine="codex",
+        argv=("true",),
+        workdir=tmp_path,
+        env={},
+        home_strategy="real",
+        timeout_seconds=5,
+    )
+    with patch.object(capacity, "redeem_codex_reset_before_start", side_effect=boom):
+        result = render_local(invocation, CredentialBundle(values={}))
+    assert result.returncode == 0
 
 
 def test_startup_does_not_redeem_without_an_expiring_reset(tmp_path):

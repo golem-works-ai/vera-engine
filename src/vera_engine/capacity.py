@@ -409,11 +409,13 @@ def check_openai() -> ProviderCapacity:
     return sub
 
 
-def _codex_home() -> Path:
-    raw = os.environ.get("CODEX_HOME", "").strip()
+def _codex_home(env: dict[str, str] | None = None) -> Path:
+    """Resolve the Codex home directory, honoring an explicit env mapping."""
+    env = os.environ if env is None else env
+    raw = env.get("CODEX_HOME", "").strip()
     if raw:
         return Path(raw)
-    return Path.home() / ".codex"
+    return Path(env.get("HOME", str(Path.home()))) / ".codex"
 
 
 def _codex_chatgpt_auth(home: Path | None = None) -> tuple[str, str] | None:
@@ -528,9 +530,7 @@ def _expiring_codex_reset(payload: dict, now: datetime) -> tuple[str, float] | N
 
 def redeem_codex_reset_before_start(env: dict[str, str]) -> None:
     """Redeem one expiring full reset below 5% weekly quota, using live usage."""
-    home = Path(
-        env.get("CODEX_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".codex")
-    )
+    home = _codex_home(env)
     auth = _codex_chatgpt_auth(home)
     if auth is None:
         return
@@ -566,9 +566,19 @@ def redeem_codex_reset_before_start(env: dict[str, str]) -> None:
         try:
             with _urlopen(req, timeout=_CODEX_USAGE_TIMEOUT_SECONDS) as resp:
                 result = json.loads(resp.read())
-            if result.get("outcome") not in ("reset", "already_redeemed"):
-                raise RuntimeError(
-                    f"Codex reset was not redeemed: {result.get('outcome')}"
+            # The consume endpoint is a private ChatGPT backend API whose
+            # response body is not contractually documented. Tolerate any
+            # unrecognized 2xx shape instead of failing startup; the request
+            # was accepted, so treat a non-allowlisted outcome as best effort.
+            if not isinstance(result, dict) or result.get("outcome") not in (
+                "reset",
+                "already_redeemed",
+            ):
+                outcome = result.get("outcome") if isinstance(result, dict) else result
+                logger.warning(
+                    "codex reset consume returned unrecognized outcome %r; "
+                    "assuming best effort",
+                    outcome,
                 )
         finally:
             # A timeout can also mean the backend redeemed it; discard stale quota.

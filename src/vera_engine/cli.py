@@ -296,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
             print(exc.stderr, end="", file=sys.stderr)
         print(f"error: {exc}", file=sys.stderr)
         return exc.returncode if exc.returncode else 1
+    except (OSError, TimeoutError) as exc:
+        # Startup failures (network probes, credential access) surface as a
+        # clean message rather than a raw traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     if result.stdout:
         print(result.stdout, end="")

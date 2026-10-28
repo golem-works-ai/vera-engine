@@ -6,6 +6,7 @@ files, spawns the engine, captures output, and cleans up.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from vera_engine.invocation import EngineInvocation, MaterializedFile, RunResult
 
 if TYPE_CHECKING:
     from vera_engine.builders.base import EngineBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class ResumeFailedError(RuntimeError):
@@ -155,7 +158,12 @@ def render_local(
         if invocation.engine == "codex" and "OPENAI_API_KEY" not in invocation.env:
             from vera_engine.capacity import redeem_codex_reset_before_start
 
-            redeem_codex_reset_before_start(full_env)
+            # Redemption is best effort: a failed probe must never block
+            # startup, so a transport or parsing failure only logs.
+            try:
+                redeem_codex_reset_before_start(full_env)
+            except Exception as exc:  # noqa: BLE001 - best-effort redemption
+                logger.warning("codex reset redemption failed: %s", exc)
 
         # Materialize config files.
         cleanup_paths = _materialize_files(
