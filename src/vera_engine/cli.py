@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from vera_engine.auto_select import (
     select_cheapest,
@@ -13,7 +14,13 @@ from vera_engine.auto_select import (
     selection_cost,
     selection_cost_ratio,
 )
-from vera_engine.capacity import check_all
+from vera_engine.capacity import (
+    ProviderCapacity,
+    check_all,
+    check_anthropic,
+    check_openai,
+    check_xai,
+)
 from vera_engine.config import load_config
 from vera_engine.credentials import CredentialBundle, SecretRef
 from vera_engine.invocation import EngineInvocation
@@ -72,9 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--strategy",
-        default="env-key",
+        default=None,
         choices=["env-key", "proxy", "none"],
-        help="Credential strategy (default: env-key)",
+        help=(
+            "Credential strategy (default: per engine, subscription login "
+            "first, then the provider API key)"
+        ),
     )
     run_parser.add_argument(
         "--resume",
@@ -108,6 +118,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+# Engines whose CLI can run on a subscription login (strategy "none") as well
+# as on a provider API key (strategy "env-key"). Each probe already applies the
+# subscription-first rule from capacity.py.
+_SUBSCRIPTION_PROBES: dict[str, tuple[Callable[[], ProviderCapacity], str]] = {
+    "claude-code": (check_anthropic, "ANTHROPIC_API_KEY"),
+    "codex": (check_openai, "OPENAI_API_KEY"),
+    "grok": (check_xai, "XAI_API_KEY"),
+}
+
+
+def _resolve_strategy(engine: str) -> str:
+    """Pick the credential strategy for an engine when --strategy is omitted.
+
+    A live subscription login wins, even when the API key is set. The key is
+    the fallback. With neither, fail fast before anything spawns.
+    Engines without a subscription concept (opencode) use env-key unprobed.
+    """
+    try:
+        probe, key_name = _SUBSCRIPTION_PROBES[engine]
+    except KeyError:
+        return "env-key"
+    cap = probe()
+    if cap.available and cap.auth_method == "oauth":
+        # Live subscription login — prefer it even when the API key is set.
+        return "none"
+    if cap.available or (cap.auth_method == "oauth" and os.environ.get(key_name)):
+        # A probe-validated key, or an exhausted subscription with the API
+        # key as fallback. An exhausted oauth login with no key exits below.
+        return "env-key"
+    detail = cap.detail or "not on subscription"
+    if os.environ.get(key_name):
+        key_clause = f" ({key_name} is set)"
+    else:
+        key_clause = f" and {key_name} is not set"
+    print(
+        f"error: engine {engine!r} has no usable credentials: no subscription "
+        f"login found ({detail}){key_clause}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _collect_credentials(invocation: EngineInvocation) -> CredentialBundle:
@@ -244,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
         sel = select_model(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
-        strategy = sel.strategy
+        if strategy is None:
+            strategy = sel.strategy
         tier_label = f" tier={sel.model.tier.name}" if tier else ""
         print(
             f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})",
@@ -256,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         sel = select_cheapest(config, engine=engine, tier=tier)
         engine = sel.model.engine
         model = sel.model.model_id
+        if strategy is None:
+            strategy = _resolve_strategy(engine)
         tier_label = f" tier={sel.model.tier.name}"
         print(
             f"auto-selected: {model} via {engine} (${sel.effective_cost:.2f}/MTok effective, strategy={strategy}{tier_label})",
@@ -270,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         engine = matching[0].engine
+
+    if strategy is None:
+        strategy = _resolve_strategy(engine)
 
     request = AgentRunRequest(
         engine=engine,

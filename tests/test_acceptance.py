@@ -28,7 +28,7 @@ def test_auto_select():
 
 @pytest.mark.acceptance
 def test_claude_code():
-    result = _run("--engine", "claude-code", "--strategy", "none")
+    result = _run("--engine", "claude-code")
     assert result.returncode == 0, f"exit {result.returncode}\nstderr: {result.stderr}"
     assert result.stdout.strip(), f"empty stdout\nstderr: {result.stderr}"
 

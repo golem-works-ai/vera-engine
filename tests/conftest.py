@@ -26,3 +26,41 @@ def _offline_catalog_prices():
     """
     with patch("vera_engine.pricing.openrouter_model_costs", return_value=None):
         yield
+
+
+def _no_subscription_probe(provider: str, key: str):
+    """Stand-in probe: no subscription login; the API key decides availability."""
+    import os
+
+    from vera_engine.capacity import ProviderCapacity
+
+    def probe() -> ProviderCapacity:
+        if os.environ.get(key):
+            return ProviderCapacity(
+                provider, available=True, detail="API key set", auth_method="api-key"
+            )
+        return ProviderCapacity(provider, available=False, detail="not on subscription")
+
+    return probe
+
+
+@pytest.fixture(autouse=True)
+def _no_live_subscription_probes(monkeypatch):
+    """Keep CLI strategy resolution off the network, tmux and the real ~/.codex.
+
+    Without this, a developer's real subscription login would change which
+    strategy the CLI tests resolve. Tests that need a live subscription patch
+    the probe entries themselves.
+    """
+    from vera_engine import cli
+
+    for engine, provider, key in (
+        ("claude-code", "anthropic", "ANTHROPIC_API_KEY"),
+        ("codex", "openai", "OPENAI_API_KEY"),
+        ("grok", "xai", "XAI_API_KEY"),
+    ):
+        monkeypatch.setitem(
+            cli._SUBSCRIPTION_PROBES,
+            engine,
+            (_no_subscription_probe(provider, key), key),
+        )
