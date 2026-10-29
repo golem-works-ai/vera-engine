@@ -137,12 +137,12 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         "claude-sonnet-4-6", "claude-code", "anthropic", "", 2.10, 10.50, Tier.stone
     ),
     _ModelDef(
-        "claude-haiku-4-5-20251001",
+        "claude-haiku-5-5",
         "claude-code",
         "anthropic",
-        "anthropic/claude-haiku-4.5",
-        1.0,
-        5.0,
+        "anthropic/claude-haiku-5.5",
+        0.10,
+        0.50,
         Tier.clay,
     ),
     # OpenAI via codex
@@ -238,12 +238,12 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
         Tier.stone,
     ),
     _ModelDef(
-        "openrouter/anthropic/claude-haiku-4.5",
+        "openrouter/anthropic/claude-haiku-5.5",
         "opencode",
         "openrouter",
-        "anthropic/claude-haiku-4.5",
-        1.0,
-        5.0,
+        "anthropic/claude-haiku-5.5",
+        0.10,
+        0.50,
         Tier.clay,
     ),
     _ModelDef(
