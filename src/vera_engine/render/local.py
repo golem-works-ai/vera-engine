@@ -171,15 +171,24 @@ def render_local(
         )
 
         try:
+            # `input=` and `stdin=` are mutually exclusive in subprocess.run.
+            # With stdin_text the prompt travels on stdin so no argv element
+            # can hit the kernel's per-argument size limit; without it stdin
+            # stays DEVNULL so engines never hang waiting for input.
+            run_kwargs: dict[str, object] = {}
+            if invocation.stdin_text is not None:
+                run_kwargs["input"] = invocation.stdin_text
+            else:
+                run_kwargs["stdin"] = subprocess.DEVNULL
             result = subprocess.run(
                 list(invocation.argv),
                 cwd=str(invocation.workdir),
                 env=full_env,
-                stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
                 timeout=invocation.timeout_seconds,
                 check=False,
+                **run_kwargs,
             )
             # Fail fast: a resume that exits non-zero almost certainly means
             # the session id is invalid or stale. Timeouts fall through to the

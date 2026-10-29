@@ -42,7 +42,10 @@ class CodexBuilder(EngineBuilder):
             argv.extend(["--sandbox", "danger-full-access"])
         # codex exec reads effort from -c model_reasoning_effort, not from a --effort flag.
         argv.extend(["-c", f"model_reasoning_effort={request.effort}"])
-        argv.append(request.prompt)
+        # `-` makes codex exec read the instructions from stdin. The prompt
+        # must not travel as an argv element: Linux rejects single arguments
+        # of 131072+ bytes with E2BIG.
+        argv.append("-")
 
         env: dict[str, str | SecretRef] = {}
 
@@ -61,6 +64,7 @@ class CodexBuilder(EngineBuilder):
             home_strategy="real",
             timeout_seconds=request.timeout_seconds,
             resume=request.resume,
+            stdin_text=request.prompt,
         )
 
     def parse_session_id(self, stdout: str) -> str | None:

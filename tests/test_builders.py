@@ -92,7 +92,8 @@ def test_claude_code_env_key_strategy(tmp_path):
     inv = ClaudeCodeBuilder().build_invocation(req, "env-key")
 
     assert inv.files == ()
-    assert inv.argv == ("claude", "-p", "do the thing", "--verbose")
+    assert inv.argv == ("claude", "-p", "--verbose")
+    assert inv.stdin_text == "do the thing"
     assert inv.env["ANTHROPIC_API_KEY"] == SecretRef("ANTHROPIC_API_KEY")
     assert "ANTHROPIC_BASE_URL" not in inv.env
     assert inv.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
@@ -390,8 +391,9 @@ def test_codex_env_key_strategy(tmp_path):
         "exec",
         "-c",
         "model_reasoning_effort=high",
-        "fix the bug",
+        "-",
     )
+    assert inv.stdin_text == "fix the bug"
     assert inv.env["OPENAI_API_KEY"] == SecretRef("OPENAI_API_KEY")
     assert inv.files == ()
     assert inv.prompt_path is None
@@ -421,12 +423,14 @@ def test_codex_model_override(tmp_path):
     assert inv.argv[inv.argv.index("--model") + 1] == "gpt-5"
 
 
-def test_codex_prompt_is_last_argv_element(tmp_path):
+def test_codex_prompt_delivered_on_stdin_not_argv(tmp_path):
     req = AgentRunRequest(
         engine="codex", prompt="the actual prompt", workspace=tmp_path
     )
     inv = CodexBuilder().build_invocation(req, "env-key")
-    assert inv.argv[-1] == "the actual prompt"
+    assert inv.argv[-1] == "-"
+    assert inv.stdin_text == "the actual prompt"
+    assert "the actual prompt" not in inv.argv
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
@@ -455,8 +459,9 @@ def test_codex_structured_output_adds_json_flag(tmp_path):
     )
     inv = CodexBuilder().build_invocation(req, "env-key")
     assert "--json" in inv.argv
-    # prompt stays last
-    assert inv.argv[-1] == "x"
+    # stdin marker stays last
+    assert inv.argv[-1] == "-"
+    assert inv.stdin_text == "x"
 
 
 def test_codex_resume_restructures_argv(tmp_path):
@@ -464,9 +469,10 @@ def test_codex_resume_restructures_argv(tmp_path):
         engine="codex", prompt="the prompt", workspace=tmp_path, resume="thr-123"
     )
     inv = CodexBuilder().build_invocation(req, "env-key")
-    # exec resume <id> ... <prompt>
+    # exec resume <id> ... -
     assert inv.argv[0:4] == ("codex", "exec", "resume", "thr-123")
-    assert inv.argv[-1] == "the prompt"
+    assert inv.argv[-1] == "-"
+    assert inv.stdin_text == "the prompt"
     assert inv.resume == "thr-123"
 
 
@@ -745,7 +751,7 @@ def test_codex_write_access_uses_full_access_sandbox(tmp_path):
     argv = CodexBuilder().build_invocation(req, "none").argv
     i = argv.index("--sandbox")
     assert argv[i + 1] == "danger-full-access"
-    assert argv[-1] == "x"
+    assert argv[-1] == "-"
 
 
 def test_claude_write_access_bypasses_permissions(tmp_path):
@@ -766,12 +772,55 @@ def test_opencode_write_access_adds_auto(tmp_path):
     assert argv[-1] == "x"
 
 
-def test_claude_code_passes_prompt_content_not_a_path(tmp_path):
+def test_claude_code_passes_prompt_on_stdin_not_a_path(tmp_path):
     req = AgentRunRequest(
         engine="claude-code", prompt="line one\nline two", workspace=tmp_path
     )
     inv = ClaudeCodeBuilder().build_invocation(req, "none")
 
-    assert inv.argv[:3] == ("claude", "-p", "line one\nline two")
+    assert inv.argv[:2] == ("claude", "-p")
+    assert "line one\nline two" not in inv.argv
+    assert inv.stdin_text == "line one\nline two"
     assert str(tmp_path) not in " ".join(inv.argv)
     assert inv.files == ()
+
+
+MAX_ARGV_PROMPT_BYTES = 131_072  # Linux MAX_ARG_STRLEN per single argv element.
+
+
+@pytest.mark.parametrize(
+    "builder, engine",
+    [
+        (ClaudeCodeBuilder(), "claude-code"),
+        (CodexBuilder(), "codex"),
+        (GrokBuilder(), "grok"),
+    ],
+)
+def test_large_prompt_keeps_argv_elements_small(builder, engine, tmp_path):
+    prompt = "x" * 140_000
+    req = AgentRunRequest(engine=engine, prompt=prompt, workspace=tmp_path)
+    inv = builder.build_invocation(req, "none")
+
+    for element in inv.argv:
+        assert len(element.encode("utf-8")) < MAX_ARGV_PROMPT_BYTES
+
+    if engine in ("claude-code", "codex"):
+        assert inv.stdin_text == prompt
+    else:
+        # grok delivers via a materialized prompt file, not stdin.
+        assert inv.stdin_text is None
+
+
+def test_opencode_oversize_prompt_raises_at_build_time(tmp_path):
+    prompt = "x" * 131_072
+    req = AgentRunRequest(engine="opencode", prompt=prompt, workspace=tmp_path)
+    with pytest.raises(ValueError, match=r"opencode.*131072"):
+        OpenCodeBuilder().build_invocation(req, "env-key")
+
+
+def test_opencode_prompt_below_limit_still_builds_on_argv(tmp_path):
+    prompt = "x" * 131_071
+    req = AgentRunRequest(engine="opencode", prompt=prompt, workspace=tmp_path)
+    inv = OpenCodeBuilder().build_invocation(req, "env-key")
+    assert inv.argv[-1] == prompt
+    assert inv.stdin_text is None

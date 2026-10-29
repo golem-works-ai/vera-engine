@@ -327,7 +327,7 @@ def test_main_run_reads_prompt_from_file(tmp_path, monkeypatch):
         )
 
     assert rc == 0
-    assert captured["invocation"].argv[-1] == "prompt from file"
+    assert captured["invocation"].stdin_text == "prompt from file"
 
 
 def test_main_run_success_prints_stdout_returns_returncode(

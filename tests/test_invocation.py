@@ -183,6 +183,22 @@ def test_engine_invocation_resume_defaults_to_none(tmp_path):
     assert inv.resume is None
 
 
+def test_engine_invocation_stdin_text_defaults_to_none(tmp_path):
+    inv = EngineInvocation(engine="codex", argv=("codex",), env={}, workdir=tmp_path)
+    assert inv.stdin_text is None
+
+
+def test_engine_invocation_stdin_text_stored(tmp_path):
+    inv = EngineInvocation(
+        engine="codex",
+        argv=("codex", "exec", "-"),
+        env={},
+        workdir=tmp_path,
+        stdin_text="a large prompt",
+    )
+    assert inv.stdin_text == "a large prompt"
+
+
 def test_engine_invocation_resume_stored(tmp_path):
     inv = EngineInvocation(
         engine="codex",
