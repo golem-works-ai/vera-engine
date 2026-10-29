@@ -186,6 +186,7 @@ def render_local(
                 env=full_env,
                 capture_output=True,
                 encoding="utf-8",
+                errors="replace",
                 timeout=invocation.timeout_seconds,
                 check=False,
                 **run_kwargs,

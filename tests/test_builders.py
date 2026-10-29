@@ -809,6 +809,7 @@ def test_large_prompt_keeps_argv_elements_small(builder, engine, tmp_path):
     else:
         # grok delivers via a materialized prompt file, not stdin.
         assert inv.stdin_text is None
+        assert any(f.content == prompt for f in inv.files)
 
 
 def test_opencode_oversize_prompt_raises_at_build_time(tmp_path):
