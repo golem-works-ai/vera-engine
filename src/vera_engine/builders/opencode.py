@@ -9,6 +9,11 @@ from vera_engine.credentials import SecretRef
 from vera_engine.invocation import EngineInvocation, MaterializedFile
 from vera_engine.request import AgentRunRequest
 
+# Linux MAX_ARG_STRLEN: a single argv element of this many bytes or more
+# makes spawn fail with E2BIG. opencode has no stdin or prompt-file channel,
+# so an oversize prompt cannot run at all.
+_MAX_ARGV_PROMPT_BYTES = 131_072
+
 
 class OpenCodeBuilder(EngineBuilder):
     @property
@@ -26,6 +31,16 @@ class OpenCodeBuilder(EngineBuilder):
         self, request: AgentRunRequest, strategy: str
     ) -> EngineInvocation:
         self.validate_strategy(strategy)
+
+        prompt_bytes = len(request.prompt.encode("utf-8"))
+        if prompt_bytes >= _MAX_ARGV_PROMPT_BYTES:
+            raise ValueError(
+                f"opencode cannot run a {prompt_bytes}-byte prompt: Linux "
+                f"rejects single argv elements of {_MAX_ARGV_PROMPT_BYTES} bytes "
+                "or more (E2BIG), and the opencode CLI has no stdin or "
+                "prompt-file channel. Reduce the prompt below "
+                f"{_MAX_ARGV_PROMPT_BYTES} bytes."
+            )
 
         model = request.model or self.default_model()
 

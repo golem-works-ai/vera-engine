@@ -47,6 +47,10 @@ class EngineInvocation:
     files: tuple[MaterializedFile, ...] = ()
     prompt_path: Path | None = None
     resume: str | None = None
+    # Prompt text delivered on the child's stdin instead of argv. Linux
+    # rejects single argv elements of 131072+ bytes (E2BIG), so engines
+    # that read the prompt from stdin use this channel.
+    stdin_text: str | None = None
 
     def __post_init__(self) -> None:
         if not self.argv:

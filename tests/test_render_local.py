@@ -326,6 +326,50 @@ def test_render_local_keeps_no_cleanup_files(tmp_path):
     assert (tmp_path / "cfg.json").exists()
 
 
+def test_render_local_stdin_text_delivered_to_child(tmp_path):
+    payload = "x" * 140_000
+    inv = EngineInvocation(
+        engine="sh",
+        argv=("sh", "-c", "wc -c"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        stdin_text=payload,
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.returncode == 0
+    assert result.stdout.strip() == "140000"
+
+
+def test_render_local_stdin_text_counts_utf8_bytes(tmp_path):
+    # 70_000 two-byte characters: 140_000 UTF-8 bytes on the child's stdin.
+    payload = "é" * 70_000
+    inv = EngineInvocation(
+        engine="sh",
+        argv=("sh", "-c", "wc -c"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+        stdin_text=payload,
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.returncode == 0
+    assert result.stdout.strip() == "140000"
+
+
+def test_render_local_no_stdin_text_leaves_stdin_devnull(tmp_path):
+    inv = EngineInvocation(
+        engine="sh",
+        argv=("sh", "-c", "wc -c"),
+        env={},
+        workdir=tmp_path,
+        home_strategy="hermetic",
+    )
+    result = render_local(inv, CredentialBundle(values={}))
+    assert result.returncode == 0
+    assert result.stdout.strip() == "0"
+
+
 def test_render_local_timeout(tmp_path):
     inv = EngineInvocation(
         engine="sleep",

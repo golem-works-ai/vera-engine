@@ -36,9 +36,11 @@ class ClaudeCodeBuilder(EngineBuilder):
     ) -> EngineInvocation:
         self.validate_strategy(strategy)
 
-        # `claude -p` is a boolean flag; the positional argument is the prompt
-        # text itself, not a path. Pass the content so every model answers it.
-        argv: list[str] = ["claude", "-p", request.prompt, "--verbose"]
+        # `claude -p` is a boolean flag; with no positional prompt the CLI
+        # reads the prompt from stdin. Delivering it there keeps the prompt
+        # out of argv, where Linux rejects single elements of 131072+ bytes
+        # with E2BIG.
+        argv: list[str] = ["claude", "-p", "--verbose"]
 
         if request.structured_output:
             argv.extend(["--output-format", "json"])
@@ -79,6 +81,7 @@ class ClaudeCodeBuilder(EngineBuilder):
             home_strategy=home,
             timeout_seconds=request.timeout_seconds,
             resume=request.resume,
+            stdin_text=request.prompt,
         )
 
     def parse_session_id(self, stdout: str) -> str | None:
