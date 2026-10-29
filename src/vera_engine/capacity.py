@@ -161,7 +161,7 @@ _CODEX_RESET_CREDITS_URL = (
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 )
 _CODEX_USAGE_TIMEOUT_SECONDS = 15
-_HAIKU_PROBE_MODEL = "claude-haiku-4-5-20251001"
+_HAIKU_PROBE_MODEL = "claude-haiku-5-5"
 _ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
 _CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 _PRESSURE_SLOPE = 0.9
