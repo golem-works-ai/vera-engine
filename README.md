@@ -34,6 +34,19 @@ request = AgentRunRequest(
 result = build_and_run(request, credentials={"ANTHROPIC_API_KEY": "..."})
 ```
 
+### Prompt delivery
+
+Linux rejects any single argv element of 131072 bytes or more (`E2BIG`), so large
+prompts never travel as an argv element. Each engine delivers the prompt through
+the largest-prompt channel its CLI supports:
+
+| Engine | Channel |
+|---|---|
+| codex | stdin (`codex exec ... -` reads instructions from stdin) |
+| claude-code | stdin (`claude -p` with no positional prompt reads stdin) |
+| opencode | argv positional — no stdin or prompt-file channel exists, so prompts of 131072+ UTF-8 bytes fail fast at build time with a clear `ValueError` |
+| grok | per-run materialized `--prompt-file` |
+
 ### Write access
 
 Headless runs start read-only. Pass `--write` (or `AgentRunRequest(write_access=True)`) when the agent must edit files or commit.
