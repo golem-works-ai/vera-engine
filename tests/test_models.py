@@ -89,7 +89,8 @@ def test_xai_provider_credential_is_xai_api_key():
 
 def test_catalog_has_gpt6_codex_and_openrouter_rows():
     by_id = {s.model_id: s for s in get_catalog()}
-    assert by_id["gpt-6-sol"].engine == "codex"
+    assert by_id["gpt-6.1-sol"].engine == "codex"
+    assert "gpt-6-sol" not in by_id
     assert by_id["gpt-6-luna"].engine == "codex"
     assert by_id["gpt-6-astra"].tier == Tier.iron
     assert by_id["openrouter/openai/gpt-6.1-sol"].engine == "opencode"

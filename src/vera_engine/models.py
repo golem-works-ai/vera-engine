@@ -166,13 +166,19 @@ _MODEL_DEFS: tuple[_ModelDef, ...] = (
     ),
     # OpenAI via codex
     # Prices from openrouter.ai/api/v1/models on 2026-10-11. The codex CLI on a
-    # ChatGPT account accepts gpt-6-sol/luna/astra and gpt-5.6-sol (probed
-    # 2026-10-22), not gpt-6.1-* or gpt-5.5.
+    # ChatGPT account accepts gpt-6.1-sol (the default sol), gpt-6-luna/astra and
+    # gpt-5.6-sol, not gpt-5.5. gpt-6-sol is a separate "Legacy" model, not an alias.
     _ModelDef(
         "gpt-6-astra", "codex", "openai", "openai/gpt-6-astra", 10.0, 50.0, Tier.iron
     ),
     _ModelDef(
-        "gpt-6-sol", "codex", "openai", "openai/gpt-6-sol", 2.0, 10.0, Tier.bronze
+        "gpt-6.1-sol",
+        "codex",
+        "openai",
+        "openai/gpt-6.1-sol",
+        2.0,
+        10.0,
+        Tier.bronze,
     ),
     _ModelDef(
         "gpt-5.6-sol", "codex", "openai", "openai/gpt-5.6-sol", 4.0, 20.0, Tier.bronze
