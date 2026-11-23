@@ -102,8 +102,9 @@ OAuth sessions. A detected subscription uses a `0.1` cost ratio unless
 
 `python -m vera_engine capacity` caches its snapshot locally for 30 minutes.
 It reports remaining quota, elapsed-window use, and used/time pressure.
-Anthropic remaining comes from unified 5h and 7d rate-limit headers on a
-1-token Haiku probe. Run `python -m vera_engine capacity --refresh` to query
+Anthropic remaining comes from `GET /api/oauth/usage`, the endpoint behind
+Claude Code's `/usage`. It reports the weekly window (the 5h limit is gone).
+Run `python -m vera_engine capacity --refresh` to query
 the providers immediately.
 
 OpenAI remaining quota comes from the ChatGPT login.

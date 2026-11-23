@@ -68,10 +68,18 @@ Usage probe is tmux plus `/usage`. The weekly bar is used percent. Invert it for
 
 Exception: explicit `--engine opencode --model openrouter/anthropic/…` may still work.
 
-Probe Anthropic remaining via a 1-token Haiku `POST /v1/messages` even when `ANTHROPIC_API_KEY` is set.
+Probe Anthropic remaining with `GET /api/oauth/usage`, even when `ANTHROPIC_API_KEY` is set. Claude Code's `/usage` reads the same endpoint.
+
+Send `Authorization: Bearer <token>` and `anthropic-beta: oauth-2025-04-20`. The call spends no tokens and needs no probe model.
 
 Use `CLAUDE_CODE_OAUTH_TOKEN` or `~/.claude/.credentials.json`. Do not send the API key.
 
 Hit `https://api.anthropic.com` directly. Do not follow `ANTHROPIC_BASE_URL`.
 
-Parse `anthropic-ratelimit-unified-{5h,7d}-*` headers. Pressure is used / (elapsed * 0.9 + 0.05). Below 1 is healthy. Report the window with the larger pressure.
+Read `five_hour` and `seven_day`. Each holds `utilization` (a percent) and `resets_at` (ISO 8601). A `null` window is not enforced. `five_hour` is `null` since Anthropic removed the 5h limit.
+
+Pressure is used / (elapsed * 0.9 + 0.05). Below 1 is healthy. Report the window with the larger pressure.
+
+Fail fast. Any non-200 status is unavailable. A 200 with no usable window is unavailable, not "usage unknown".
+
+The endpoint is undocumented. Do not go back to a Haiku `POST /v1/messages` probe: the newest Haiku can answer 429 with no rate-limit headers (claude-haiku-5-5, 2026-11-19).

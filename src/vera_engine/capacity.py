@@ -2,8 +2,8 @@
 
 OpenRouter: ``GET /credits`` at ``OPENROUTER_BASE_URL`` (default openrouter.ai).
 A gateway base without that endpoint still counts the key as usable.
-Anthropic: 1-token Haiku ``POST /v1/messages`` and parse
-``anthropic-ratelimit-unified-{5h,7d}-*`` response headers.
+Anthropic: ``GET /api/oauth/usage`` (the endpoint behind Claude Code's ``/usage``)
+with the OAuth token. ``five_hour`` is ``null`` since Anthropic removed that limit.
 xAI (Grok): launch interactive TUI in tmux, send ``/usage``, parse weekly limit.
 ``grok models`` is the fallback when tmux or ``/usage`` cannot produce a percent.
 OpenAI (Codex): ChatGPT ``GET /backend-api/wham/usage`` for the login in
@@ -155,21 +155,20 @@ def check_anthropic() -> ProviderCapacity:
 
 # Vera runners set ANTHROPIC_BASE_URL to the internal proxy, which 401s
 # setup-tokens. This probe must hit Anthropic directly.
-_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20"
+_ANTHROPIC_USAGE_TIMEOUT_SECONDS = 15
 _CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 _CODEX_RESET_CREDITS_URL = (
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 )
 _CODEX_USAGE_TIMEOUT_SECONDS = 15
-_HAIKU_PROBE_MODEL = "claude-haiku-5-5"
-_ANTHROPIC_PROBE_TIMEOUT_SECONDS = 15
 _CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 _PRESSURE_SLOPE = 0.9
 _PRESSURE_FLOOR = 0.05
-_ALLOWED_UNIFIED_STATUSES = frozenset({"allowed", "allowed_warning"})
-_UNIFIED_WINDOWS = (
-    ("5h", "session", timedelta(hours=5)),
-    ("7d", "week", timedelta(days=7)),
+_ANTHROPIC_USAGE_WINDOWS = (
+    ("five_hour", "session", timedelta(hours=5)),
+    ("seven_day", "week", timedelta(days=7)),
 )
 
 
@@ -181,7 +180,7 @@ def _usage_pressure(used_pct: float, window_used_pct: float) -> float:
 
 
 def _anthropic_oauth_token() -> str | None:
-    # API keys do not return unified 5h/7d headers. The pool selector ranks
+    # API keys cannot call /api/oauth/usage. The pool selector ranks
     # CLAUDE_CODE_OAUTH_TOKEN, so that env var is the credential, not a shadow.
     env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     if env:
@@ -207,35 +206,26 @@ def _urlopen(req: urllib.request.Request, timeout: float) -> object:
 
 
 _RAW_BODY_LOG_BYTES = 2000
+_USAGE_BODY_MAX_BYTES = 256 * 1024
 
 
-def _post_anthropic_messages(token: str) -> tuple[int, object, bytes]:
-    body = json.dumps(
-        {
-            "model": _HAIKU_PROBE_MODEL,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "x"}],
-        }
-    ).encode()
+def _get_anthropic_usage(token: str) -> tuple[int, bytes]:
+    """``GET /api/oauth/usage``: the endpoint behind Claude Code's ``/usage``."""
     req = urllib.request.Request(
-        _ANTHROPIC_MESSAGES_URL,
-        data=body,
-        method="POST",
+        _ANTHROPIC_USAGE_URL,
+        method="GET",
         headers={
             "Authorization": f"Bearer {token}",
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
+            "anthropic-beta": _ANTHROPIC_OAUTH_BETA,
+            "Accept": "application/json",
             "User-Agent": "vera-engine",
         },
     )
-    # Capped at the same size _log_raw_probe_failure truncates to -- the body
-    # is only ever used for that log line, so there's no reason to pull more
-    # of it into memory on every probe call, success included.
     try:
-        with _urlopen(req, timeout=_ANTHROPIC_PROBE_TIMEOUT_SECONDS) as resp:
-            return int(resp.status), resp.headers, resp.read(_RAW_BODY_LOG_BYTES)
+        with _urlopen(req, timeout=_ANTHROPIC_USAGE_TIMEOUT_SECONDS) as resp:
+            return int(resp.status), resp.read(_USAGE_BODY_MAX_BYTES)
     except urllib.error.HTTPError as exc:
-        return int(exc.code), exc.headers, exc.read(_RAW_BODY_LOG_BYTES)
+        return int(exc.code), exc.read(_RAW_BODY_LOG_BYTES)
 
 
 def _log_raw_probe_failure(reason: str, status: int, body: bytes) -> None:
@@ -255,14 +245,14 @@ def _log_raw_probe_failure(reason: str, status: int, body: bytes) -> None:
 
 
 def _check_claude_code_subscription() -> ProviderCapacity:
-    """Probe Anthropic subscription remaining via unified rate-limit headers."""
+    """Read Anthropic subscription remaining from the OAuth usage endpoint."""
     token = _anthropic_oauth_token()
     if not token:
         return ProviderCapacity(
             "anthropic", available=False, detail="not on subscription"
         )
     try:
-        status, headers, body = _post_anthropic_messages(token)
+        status, body = _get_anthropic_usage(token)
     except TimeoutError:
         return ProviderCapacity(
             "anthropic", available=False, detail="anthropic usage check timed out"
@@ -272,101 +262,99 @@ def _check_claude_code_subscription() -> ProviderCapacity:
         return ProviderCapacity(
             "anthropic", available=False, detail=f"check failed: {exc}"
         )
-    if status in (401, 403):
+    if status == 401:
         _log_raw_probe_failure("unauthorized", status, body)
         return ProviderCapacity(
             "anthropic", available=False, detail="not on subscription"
         )
-    if status not in (200, 429):
+    if status != 200:
         _log_raw_probe_failure("unexpected status", status, body)
         return ProviderCapacity(
             "anthropic",
             available=False,
             detail=f"anthropic usage check HTTP {status}",
         )
-    cap = _parse_anthropic_rate_headers(headers)
+    cap = _parse_anthropic_usage(body)
     if not cap.available:
         _log_raw_probe_failure("non-available verdict", status, body)
     logger.info(
-        "anthropic header probe HTTP %s remaining_pct=%s window=%s",
-        status,
+        "anthropic usage probe remaining_pct=%s window=%s",
         cap.remaining_pct,
         cap.window_name,
     )
     return cap
 
 
-def _header_map(headers: object) -> dict[str, str]:
-    if headers is None:
-        return {}
-    try:
-        items = headers.items()
-    except AttributeError:
-        return {}
-    return {str(key).lower(): str(value) for key, value in items}
-
-
 @dataclass(frozen=True)
-class _UnifiedWindow:
+class _UsageWindow:
     window_name: str
     remaining_pct: float
     token_used_pct: float
     window_used_pct: float
-    status: str
     pressure: float
 
 
-def _parse_anthropic_rate_headers(
-    headers: object, *, now: datetime | None = None
+def _parse_anthropic_usage(
+    body: bytes, *, now: datetime | None = None
 ) -> ProviderCapacity:
-    """Pick the 5h/7d window with larger used/time pressure."""
-    mapped = _header_map(headers)
+    """Pick the window with larger used/time pressure from ``/api/oauth/usage``.
+
+    A ``null`` window means Anthropic does not enforce it (``five_hour`` is
+    ``null`` since the 5h limit was removed). A response with no usable window
+    is a failure, never "usage unknown".
+    """
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ProviderCapacity(
+            "anthropic", available=False, detail="usage response was not JSON"
+        )
+    if not isinstance(payload, dict):
+        return ProviderCapacity(
+            "anthropic", available=False, detail="usage response was not an object"
+        )
     current_time = now or datetime.now(UTC)
-    readings: list[_UnifiedWindow] = []
-    for key, window_name, duration in _UNIFIED_WINDOWS:
-        prefix = f"anthropic-ratelimit-unified-{key}"
-        util_raw = mapped.get(f"{prefix}-utilization")
-        reset_raw = mapped.get(f"{prefix}-reset")
-        if util_raw is None or reset_raw is None:
+    readings: list[_UsageWindow] = []
+    for key, window_name, duration in _ANTHROPIC_USAGE_WINDOWS:
+        window = payload.get(key)
+        if not isinstance(window, dict):
+            continue
+        utilization = _as_float(window.get("utilization"))
+        reset_raw = window.get("resets_at")
+        if utilization is None or not isinstance(reset_raw, str):
             continue
         try:
-            utilization = float(util_raw)
-            reset_epoch = int(float(reset_raw))
+            reset_at = datetime.fromisoformat(reset_raw)
         except ValueError:
             continue
-        remaining_pct = max(0.0, min(100.0, (1.0 - utilization) * 100.0))
-        reset_at = datetime.fromtimestamp(reset_epoch, tz=UTC)
+        if reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=UTC)
+        used_pct = max(0.0, min(100.0, utilization))
         window_used = _window_used_pct(reset_at, duration, current_time)
         readings.append(
-            _UnifiedWindow(
+            _UsageWindow(
                 window_name=window_name,
-                remaining_pct=remaining_pct,
-                token_used_pct=utilization * 100.0,
+                remaining_pct=100.0 - used_pct,
+                token_used_pct=used_pct,
                 window_used_pct=window_used,
-                status=mapped.get(f"{prefix}-status", ""),
-                pressure=_usage_pressure(utilization * 100.0, window_used),
+                pressure=_usage_pressure(used_pct, window_used),
             )
         )
 
     if not readings:
         return ProviderCapacity(
             "anthropic",
-            available=True,
-            detail="subscription active, usage unknown",
-            auth_method="oauth",
+            available=False,
+            detail="usage response had no usable five_hour or seven_day window",
         )
 
     chosen = max(readings, key=lambda reading: reading.pressure)
     parts = [
         f"{reading.window_name} {reading.remaining_pct:.0f}%" for reading in readings
     ]
-    status_ok = all(
-        (not reading.status) or reading.status in _ALLOWED_UNIFIED_STATUSES
-        for reading in readings
-    )
     return ProviderCapacity(
         "anthropic",
-        available=chosen.remaining_pct > 2 and status_ok,
+        available=chosen.remaining_pct > 2,
         remaining_pct=chosen.remaining_pct,
         detail=f"{', '.join(parts)} remaining",
         auth_method="oauth",
